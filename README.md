@@ -1,6 +1,9 @@
-# tmux-pane-tree
+# tmux-binder
 
-[![Tests](https://github.com/sandudorogan/tmux-pane-tree/actions/workflows/test.yml/badge.svg)](https://github.com/sandudorogan/tmux-pane-tree/actions/workflows/test.yml)
+[![Tests](https://github.com/illegalstudio/tmux-binder/actions/workflows/test.yml/badge.svg)](https://github.com/illegalstudio/tmux-binder/actions/workflows/test.yml)
+
+An independently maintained fork of
+[tmux-pane-tree](https://github.com/sandudorogan/tmux-pane-tree).
 
 A persistent session tree on the left of every tmux window, with live status
 badges for `claude`, `codex`, `cursor`, `opencode`, `pi`, and `kiro`.
@@ -44,7 +47,7 @@ Requires tmux 3.0+, Python 3, bash 4.0+.
 **TPM**
 
 ```tmux
-set -g @plugin 'sandudorogan/tmux-pane-tree'
+set -g @plugin 'illegalstudio/tmux-binder'
 set -g @tmux_pane_tree_install_agent_hooks 1   # optional: wire agent hooks on load
 ```
 
@@ -53,22 +56,21 @@ Reload tmux, then `prefix + I`.
 **Manual**
 
 ```bash
-git clone https://github.com/sandudorogan/tmux-pane-tree ~/.config/tmux/plugins/tmux-pane-tree
+git clone https://github.com/illegalstudio/tmux-binder ~/.config/tmux/plugins/tmux-binder
 ```
 
 ```tmux
-source-file ~/.config/tmux/plugins/tmux-pane-tree/tmux-pane-tree.conf
+source-file ~/.config/tmux/plugins/tmux-binder/tmux-pane-tree.conf
 ```
 
 To patch Claude Code, Codex, Cursor, OpenCode, Pi, and Kiro hook config after a manual install:
 
 ```bash
-bash ~/.config/tmux/plugins/tmux-pane-tree/scripts/features/hooks/install-agent-hooks.sh
+bash ~/.config/tmux/plugins/tmux-binder/scripts/features/hooks/install-agent-hooks.sh
 ```
 
-> Migrating from `tmux-sidebar`: the old `@tmux_sidebar_*` options, paths, and
-> `tmux-pane-tree.tmux` source line keep working for one release cycle. New
-> installs should use the `tmux-pane-tree` names.
+The `tmux-pane-tree.conf` entry point, `@tmux_pane_tree_*` options and legacy
+`@tmux_sidebar_*` options remain compatible with existing configurations.
 
 ## Usage
 
@@ -112,6 +114,7 @@ Set options with `set -g` in your tmux config.
 | `@tmux_pane_tree_session_order`           |    —    | Comma-separated session order, rest follow    |
 | `@tmux_pane_tree_filter`                  |    —    | Comma-separated pane filter (see below)       |
 | `@tmux_pane_tree_hide_panes`              |  `off`  | Show only sessions and windows                |
+| `@tmux_pane_tree_compact_single_panes`    |  `off`  | Fold single-pane windows into one row         |
 | `@tmux_pane_tree_scrolloff`               |   `8`   | Rows kept visible around the cursor, `0` off  |
 | `@tmux_pane_tree_icon_theme`              | `auto`  | `auto`, `ascii`, `unicode`, or `nerdfont`     |
 | `@tmux_pane_tree_icon_<app>`              |    —    | Override one app icon                         |
@@ -133,6 +136,15 @@ metadata. `f` toggles it at runtime.
 
 ```tmux
 set -g @tmux_pane_tree_filter "claude,codex,cursor,opencode"
+```
+
+**Compact single-pane windows.** Set `@tmux_pane_tree_compact_single_panes` to
+`on` to show a window with one content pane as one selectable row. The row
+retains the pane's agent status badge. The sidebar pane does not count, and
+filtering does not turn a multi-pane window into a compact row.
+
+```tmux
+set -g @tmux_pane_tree_compact_single_panes on
 ```
 
 **Shortcuts.** Actions: `add_window` (`aw`), `add_session` (`as`), `go_top`
@@ -221,8 +233,23 @@ examples/      copy-ready agent hook configs
 
 ```bash
 bash tests/run.sh                 # all tests, no live tmux needed
-bash scripts/install-live.sh      # copy into the plugin dir and reload open sidebars
 ```
+
+For development, link the checkout into tmux's plugin directory and load the
+configuration shown above. Move an existing plugin directory aside first.
+
+```bash
+mkdir -p ~/.config/tmux/plugins
+ln -s "$PWD" ~/.config/tmux/plugins/tmux-binder
+bash scripts/reload-live.sh
+```
+
+Shell scripts are read from the checkout when invoked. After editing Python UI
+code, run `bash scripts/reload-live.sh` again: it reloads the plugin configuration
+and restarts only sidebar processes, preserving content panes. It does not edit
+your tmux configuration or install agent hooks. Leave the optional
+`@tmux_pane_tree_install_agent_hooks` setting disabled to keep automatic hook
+installation off when loading the plugin.
 
 ## License
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TEST_TMP="$(mktemp -d "/tmp/tmux-sidebar-real-tests.XXXXXX")"
+TEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/tmux-sidebar-real-tests.XXXXXX")"
 REAL_TMUX_SOCKET="tmux-sidebar-real-$$"
 REAL_TMUX_SOCKET_PATH="$TEST_TMP/$REAL_TMUX_SOCKET.sock"
 REAL_TMUX_STATE_DIR="$TEST_TMP/state"
