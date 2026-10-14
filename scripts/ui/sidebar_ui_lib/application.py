@@ -1,0 +1,360 @@
+from __future__ import annotations
+
+import argparse
+import curses
+import os
+import select
+import socket
+import sys
+import time
+
+from binder.config import SHORTCUTS
+from binder.runtime import MAX_MESSAGE, Identity, connect, decode, encode, request
+
+from .render import Renderer, colors
+from .view import clusters, control_key, ensure_visible, navigable, selection_for, shortcut_step, visible_rows
+
+
+class View:
+    def __init__(self, screen, identity: Identity, pane: str) -> None:
+        self.screen, self.identity, self.pane = screen, identity, pane
+        self.renderer = Renderer(screen)
+        self.channel: socket.socket | None = None
+        self.incoming = bytearray()
+        self.outgoing = bytearray()
+        self.snapshot: dict = {}
+        self.rows: list[dict] = []
+        self.selected = ""
+        self.collapsed: set[str] = set()
+        self.scroll = 0
+        self.user_scrolled = False
+        self.pending = ""
+        self.searching = False
+        self.query = ""
+        self.prompt: dict | None = None
+        self.notice = ""
+        self.notice_until = 0.0
+        self.attributes: dict[str, int] = {}
+        self.dirty = True
+        self.revision = -1
+        self.jumps: list[tuple[str, str]] = []
+        self.jump_index = -1
+        self.running = True
+
+    def send(self, command: str, **values: object) -> None:
+        self.outgoing.extend(encode({"command": command, "pane": self.pane, "client": self.snapshot.get("client", ""), **values}))
+        if len(self.outgoing) > MAX_MESSAGE:
+            raise ConnectionError("Coordinator is not consuming view commands")
+
+    def reconnect(self) -> None:
+        if self.channel:
+            self.channel.close()
+        self.channel = connect(self.identity)
+        self.channel.setblocking(False)
+        self.incoming.clear()
+        self.outgoing.clear()
+        self.send("subscribe")
+
+    def accept(self, message: dict) -> None:
+        if "error" in message:
+            self.notice = message["error"]
+            self.notice_until = time.monotonic() + 5
+            self.dirty = True
+            return
+        if message.get("type") == "action":
+            if message.get("client"):
+                self.snapshot["client"] = message["client"]
+            self.action(message.get("action", ""), message.get("key", ""))
+            return
+        if message.get("type") != "snapshot":
+            return
+        previous = self.snapshot
+        self.snapshot = message
+        self.revision = message["revision"]
+        if not previous:
+            saved = message.get("view_state", {})
+            self.collapsed = set(saved.get("collapsed", []))
+            self.selected = saved.get("selected", "")
+            self.scroll = saved.get("scroll", 0)
+        self.rows = visible_rows(message["rows"], self.collapsed)
+        main = message.get("main", "")
+        if not message.get("focused"):
+            reset = not previous or previous.get("focused") or previous.get("main") != main
+            self.selected = selection_for(self.rows, "" if reset else self.selected, main)
+            if reset:
+                self.jumps = []
+                self.jump_index = -1
+        else:
+            self.selected = selection_for(self.rows, self.selected, main)
+            if not self.jumps:
+                self.jumps = [("main", main), ("sidebar", self.selected)] if main else [("sidebar", self.selected)]
+                self.jump_index = len(self.jumps) - 1
+        if previous.get("colors") != message.get("colors") or previous.get("styles") != message.get("styles"):
+            self.attributes = colors(message.get("colors", {}), message.get("styles", {}))
+        self.dirty = True
+
+    def row(self, key: str = "") -> dict | None:
+        return next((row for row in self.snapshot.get("rows", []) if row["key"] == (key or self.selected)), None)
+
+    def select(self, key: str, record: bool = False) -> None:
+        self.selected = key
+        self.user_scrolled = False
+        self.dirty = True
+        if record:
+            entry = ("sidebar", key)
+            self.jumps = self.jumps[:self.jump_index + 1]
+            if not self.jumps or self.jumps[-1] != entry:
+                self.jumps.append(entry)
+            self.jump_index = len(self.jumps) - 1
+
+    def search_next(self, direction: int) -> None:
+        raw = self.snapshot.get("rows", [])
+        matches = []
+        seen = set()
+        for index, candidate in enumerate(raw):
+            if self.query.casefold() not in candidate["text"].casefold():
+                continue
+            row = candidate if "pane_id" in candidate else next((child for child in raw[index + 1:] if child["key"].startswith(candidate["key"] + "/") and "pane_id" in child), None)
+            if row is not None and row["key"] not in seen:
+                matches.append(row)
+                seen.add(row["key"])
+        if not matches:
+            return
+        index = next((index for index, row in enumerate(matches) if row["key"] == self.selected), -1 if direction > 0 else 0)
+        row = matches[(index + direction) % len(matches)]
+        self.collapsed = {parent for parent in self.collapsed if not row["key"].startswith(parent + "/")}
+        self.rows = visible_rows(raw, self.collapsed)
+        self.select(row["key"])
+
+    def action(self, action: str, key: str = "") -> None:
+        if key:
+            self.select(key)
+        row = self.row()
+        if action in {"jump_back", "jump_forward"}:
+            index = self.jump_index + (-1 if action == "jump_back" else 1)
+            if 0 <= index < len(self.jumps):
+                self.jump_index = index
+                location, value = self.jumps[index]
+                if location == "main":
+                    self.send("focus-main")
+                else:
+                    self.select(value)
+            return
+        if action == "close":
+            self.send("close")
+        elif action == "focus_main":
+            self.send("focus-main")
+        elif action in {"go_top", "go_bottom"}:
+            targets = navigable(self.rows, self.collapsed)
+            if targets:
+                self.select(targets[0 if action == "go_top" else -1]["key"], True)
+        elif action == "select" and row:
+            self.send("activate", key=row["key"])
+        elif action in {"add_window", "add_session", "rename_window", "rename_session", "rename"} and row:
+            if action == "rename":
+                action = "rename_session" if row["kind"] == "session" else "rename_window"
+            initial = row.get("session", "") if action == "rename_session" else row.get("name", "") if action == "rename_window" else ""
+            self.prompt = {"action": action, "key": row["key"], "text": initial, "label": action.replace("_", " ").capitalize() + ": "}
+        elif action == "confirm_close" and row:
+            self.prompt = {"action": "confirm", "key": row["key"], "text": "", "label": "Close selected item? [y/N] "}
+        elif action == "close_pane" and row:
+            targets = navigable(self.rows, self.collapsed)
+            index = next((index for index, item in enumerate(targets) if item["key"] == self.selected), 0)
+            if len(targets) > 1:
+                self.select(targets[index + 1 if index + 1 < len(targets) else index - 1]["key"])
+            self.send("remove", key=row["key"])
+        elif action == "toggle_filter":
+            self.send("toggle-filter")
+        elif action == "refresh":
+            self.send("refresh")
+        self.dirty = True
+
+    def handle_key(self, key: str | int) -> None:
+        if key == curses.KEY_RESIZE:
+            curses.update_lines_cols()
+            self.dirty = True
+            return
+        if key == curses.KEY_MOUSE:
+            self.mouse()
+            return
+        if self.prompt:
+            if key == "\x1b":
+                self.prompt = None
+            elif self.prompt["action"] == "confirm":
+                if key in {"y", "Y"}:
+                    self.send("remove", key=self.prompt["key"])
+                self.prompt = None
+            elif key in {"\n", "\r"}:
+                self.send("name", action=self.prompt["action"], key=self.prompt["key"], name=self.prompt["text"])
+                self.prompt = None
+            elif key in {curses.KEY_BACKSPACE, "\x7f", "\b"}:
+                self.prompt["text"] = "".join(clusters(self.prompt["text"])[:-1])
+            elif key == "\x15":
+                self.prompt["text"] = ""
+            elif isinstance(key, str) and key.isprintable():
+                self.prompt["text"] += key
+            self.dirty = True
+            return
+        if self.searching:
+            if key == "\x1b":
+                self.searching, self.query = False, ""
+            elif key in {"\n", "\r"}:
+                self.searching = False
+            elif key in {curses.KEY_BACKSPACE, "\x7f", "\b"}:
+                self.query = "".join(clusters(self.query)[:-1])
+                self.search_next(1)
+            elif isinstance(key, str) and key.isprintable():
+                self.query += key
+                current = self.row()
+                if not current or self.query.casefold() not in current["text"].casefold():
+                    self.search_next(1)
+            self.dirty = True
+            return
+        configured = self.snapshot.get("shortcuts", SHORTCUTS)
+        control_action = next((name for name, shortcut in configured.items() if control_key(shortcut) == key and control_key(shortcut)), "")
+        if control_action:
+            self.action(control_action)
+            return
+        if self.query and not self.pending and key in {"n", "N"}:
+            self.search_next(1 if key == "n" else -1)
+            return
+        if key == "\x1b" and self.query:
+            self.query = ""
+            self.dirty = True
+            return
+        if isinstance(key, str) and (self.pending or any(value.startswith(key) for value in configured.values())):
+            self.pending, action = shortcut_step(self.pending, key, configured)
+            if action:
+                self.action(action)
+            return
+        if key in {"j", "k", curses.KEY_DOWN, curses.KEY_UP}:
+            targets = navigable(self.rows, self.collapsed)
+            if targets:
+                index = next((i for i, row in enumerate(targets) if row["key"] == self.selected), 0)
+                index = max(0, min(len(targets) - 1, index + (1 if key in {"j", curses.KEY_DOWN} else -1)))
+                self.select(targets[index]["key"])
+        elif key in {"q", "\x1b"}:
+            self.action("close")
+        elif key == "\x0c":
+            self.action("focus_main")
+        elif key in {"\n", "\r"}:
+            self.action("select")
+        elif key == "/":
+            self.searching, self.query = True, ""
+            self.dirty = True
+        elif key == "p":
+            self.send("toggle-panes")
+        elif key == "m":
+            index = next((i for i, row in enumerate(self.rows) if row["key"] == self.selected), 0)
+            self.send("menu", row=max(0, index - self.scroll), key=self.selected)
+        elif key in {"h", curses.KEY_LEFT}:
+            row = self.row()
+            if row:
+                parent = row.get("parent", row["key"])
+                self.collapsed.add(parent)
+                self.rows = visible_rows(self.snapshot.get("rows", []), self.collapsed)
+                self.select(parent)
+        elif key in {"l", curses.KEY_RIGHT}:
+            if self.selected in self.collapsed:
+                self.collapsed.remove(self.selected)
+                self.rows = visible_rows(self.snapshot.get("rows", []), self.collapsed)
+                self.dirty = True
+
+    def mouse(self) -> None:
+        try:
+            _, _, y, _, state = curses.getmouse()
+        except curses.error:
+            return
+        if state & curses.BUTTON4_PRESSED:
+            self.scroll = max(0, self.scroll - 3)
+            self.user_scrolled = True
+        elif state & getattr(curses, "BUTTON5_PRESSED", 0x08000000):
+            self.scroll += 3
+            self.user_scrolled = True
+        elif state & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
+            index = y + self.scroll
+            if 0 <= index < len(self.rows):
+                self.select(self.rows[index]["key"])
+                self.action("select")
+        elif state & (curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED):
+            self.send("menu", row=y)
+        self.dirty = True
+
+    def draw(self) -> None:
+        footer = self.prompt["label"] + self.prompt["text"] if self.prompt else "/" + self.query if self.searching or self.query else self.notice
+        height, _ = self.screen.getmaxyx()
+        lines = max(0, height - bool(footer))
+        index = next((index for index, row in enumerate(self.rows) if row["key"] == self.selected), -1)
+        if not self.user_scrolled:
+            self.scroll = ensure_visible(index, self.scroll, lines, self.snapshot.get("scrolloff", 8))
+        self.scroll = min(max(0, self.scroll), max(0, len(self.rows) - lines))
+        self.renderer.draw(self.rows, self.selected, self.scroll, self.attributes, self.query, footer, self.searching or bool(self.prompt), self.collapsed)
+        self.send("rendered", revision=self.revision, keys=[row["key"] for row in self.rows], scroll=self.scroll, selected=self.selected, collapsed=sorted(self.collapsed))
+        self.dirty = False
+
+    def run(self) -> None:
+        self.screen.keypad(True)
+        self.screen.nodelay(True)
+        if hasattr(curses, "set_escdelay"):
+            curses.set_escdelay(25)
+        try:
+            curses.curs_set(0)
+            curses.start_color()
+            curses.use_default_colors()
+        except curses.error:
+            pass
+        curses.mousemask(curses.ALL_MOUSE_EVENTS | getattr(curses, "REPORT_MOUSE_POSITION", 0))
+        self.reconnect()
+        try:
+            while self.running:
+                if self.dirty:
+                    self.draw()
+                if self.notice and self.notice_until and time.monotonic() >= self.notice_until:
+                    self.notice = ""
+                    self.dirty = True
+                assert self.channel is not None
+                readable, writable, _ = select.select([sys.stdin.fileno(), self.channel], [self.channel] if self.outgoing else [], [], 1 if self.notice else None)
+                try:
+                    if self.channel in writable and self.outgoing:
+                        sent = self.channel.send(self.outgoing)
+                        del self.outgoing[:sent]
+                    if self.channel in readable:
+                        chunk = self.channel.recv(65536)
+                        if not chunk:
+                            raise ConnectionError("Coordinator disconnected")
+                        self.incoming.extend(chunk)
+                        if len(self.incoming) > MAX_MESSAGE:
+                            raise ValueError("Coordinator message exceeds size limit")
+                        while b"\n" in self.incoming:
+                            raw, _, remaining = self.incoming.partition(b"\n")
+                            self.incoming = bytearray(remaining)
+                            self.accept(decode(raw))
+                except (ConnectionError, BrokenPipeError, OSError):
+                    self.notice = "Reconnecting…"
+                    self.dirty = True
+                    self.reconnect()
+                if sys.stdin.fileno() in readable:
+                    while True:
+                        try:
+                            key = self.screen.get_wch()
+                        except curses.error:
+                            break
+                        self.handle_key(key)
+        finally:
+            if self.channel:
+                self.channel.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dump-render", action="store_true")
+    args = parser.parse_args()
+    identity = Identity.resolve()
+    if args.dump_render:
+        message = request(identity, "snapshot")
+        print("\n".join("  " + row["text"] for row in message["rows"]))
+        return
+    pane = os.environ.get("TMUX_PANE", "")
+    if not pane:
+        raise RuntimeError("The sidebar UI must run inside a tmux pane")
+    curses.wrapper(lambda screen: View(screen, identity, pane).run())

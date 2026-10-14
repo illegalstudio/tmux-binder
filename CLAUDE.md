@@ -1,157 +1,83 @@
-# tmux-sidebar
+# tmux-binder development
 
-A tmux plugin that adds an interactive sidebar showing sessions, windows, and panes with agent status badges. Written in bash and python3 (curses UI).
+A tmux plugin with one Python coordinator per server and one lightweight curses
+view per sidebar pane. Bash files are compatibility launchers.
 
 ## Architecture
 
-```
-sidebar.tmux          <- polyglot TPM entry point, applies tmux-pane-tree.conf
-tmux-pane-tree.tmux   <- polyglot, no-op under TPM, sources the conf when sourced
-tmux-pane-tree.conf   <- primary tmux config: hooks, keybindings, startup
-sidebar.conf          <- legacy config (kept for install-live.sh compatibility)
-scripts/
-  core/
-    lib.sh            <- shared bash utilities (state, tmux helpers, json)
-    hook-lib.sh       <- shared shell hook input handling
-    hook-parser.py    <- shared agent event parsing
-    hook-metadata.py  <- structured metadata extraction from hook payloads
-  ui/
-    sidebar-ui.py     <- interactive curses loop entrypoint
-    sidebar_ui_lib/
-      core.py         <- tmux/config helpers, prompts, pane actions
-      status.py       <- live agent detection and badge selection
-      tree.py         <- tree loading, selection, search helpers
-      render.py       <- curses colors, drawing, row-map/context-menu IPC
-      icon_config.py  <- icon theme/badge config (ASCII, Unicode, Nerd Font)
-  features/
-    sidebar/          <- toggle/ensure/focus/close/render lifecycle helpers
-    hooks/            <- agent hook wrappers, event filter, built-in installer
-    state/            <- pane-state writers and cleanup helpers
-    context-menu/     <- right-click menu integration
-    sessions/         <- creation and renaming of windows/sessions
-  install-live.sh     <- dev installer (copies to plugin dir, patches paths, reloads)
-tests/
-  testlib.sh          <- fake tmux test framework
-  real_tmux_testlib.sh <- live tmux test helpers
-  run.sh              <- test runner
-  core/ sidebar/ ui/ hooks/ state/ sessions/ context-menu/ integration/ examples/
-                      <- grouped test suites
-examples/
-  claude-hook.sh / codex-hook.sh / cursor-hook.sh / kiro-hook.sh / opencode-hook.sh / pi-hook.sh
-                      <- agent integration hooks
-docs/                 <- project landing page
-```
+- sidebar.tmux is the executable TPM entrypoint. tmux-pane-tree.tmux is a
+  no-op when executed by TPM. Both support tmux source-file.
+- tmux-pane-tree.conf starts/configures the coordinator. sidebar.conf sources
+  the same entrypoint for compatibility.
+- scripts/binder.py dispatches commands through binder/cli.py.
+- binder/runtime.py owns private Unix sockets, bootstrap locking, protocol
+  versioning and atomic persistence. Runtime paths include socket hash and server
+  PID. Socket-specific preferences survive server restarts.
+- binder/tmux.py groups commands through source-file stdin with explicit quoting.
+  Snapshot fields use byte-length prefixes, so names may contain separators,
+  quotes, Unicode and newlines.
+- binder/controller.py owns application state and mutations. Tmux owns the real
+  topology. binder/model.py projects cached data into tree rows without I/O.
+- binder/server.py serializes commands, coalesces notifications, broadcasts
+  snapshots and processes render acknowledgements.
+- Native tmux hooks signal a wait-for channel. The listener is an unattached
+  command client, not a mutex or an attached control-mode client. Rearm it after
+  any code path that drains pending notifications, including request dispatch.
+- Title hooks deduplicate normalized titles in a pane option before signaling.
+  Braille spinner frames are equivalent; entering or leaving that state is not.
+  Use explicit regex members because Unicode ranges depend on server collation.
+- binder/agents.py normalizes all six integrations and owns ordering,
+  subagent lifecycle and detection. Codex terminal probes run centrally.
+- binder/installer.py owns optional agent config changes and backups.
+- UI code stays in scripts/ui/sidebar_ui_lib/. Views handle input, search,
+  scroll, prompts and curses drawing. They do not query tmux or read agent files.
+- scripts/features/ and examples/ preserve public shell paths as launchers.
+  Do not put business logic in them.
 
-State files live in `$XDG_STATE_HOME/tmux-sidebar/pane-{PANE_ID}.json` (defaults to `~/.local/state/tmux-sidebar/`).
+## Invariants
 
-## Testing
+- One coordinator per server, one owned sidebar per window, one global
+  open/closed state. Linked windows have one view and multiple tree branches.
+- Keep preferred width separate from constrained geometry. Automatic resizing,
+  zoom and terminal changes must not overwrite user preferences.
+  Compute the minimum content width from the complete layout, including split
+  borders. Contain a no-space failure per window until its geometry changes.
+- Use explicit client/session/window/pane IDs for actions. A shared tmux pane
+  has one shared terminal, so its clients share the curses cursor.
+- User close requests and removing a sidebar close all views. A process failure
+  is recoverable and must preserve content panes.
+- Render acknowledgements prepare destination selection before navigation.
+- Keep @tmux_pane_tree_* options and legacy @tmux_sidebar_* compatibility at
+  the boundary. New runtime state belongs in the coordinator, not flat tmux
+  options or per-view IPC files.
+- State and cleanup are scoped to the exact server generation. Never inspect
+  another server's pane files to infer liveness.
+- Never replay a mutation after an ambiguous disconnect. Read-only requests may
+  reconnect once.
 
-### Unit tests (fake tmux, no live session needed)
+## Style
 
-```bash
-bash tests/run.sh
-```
+Use Python 3.10+, future annotations, typed signatures and pathlib. Keep pure
+functions separate from I/O. Dataclasses and small stateful services are
+appropriate when they own a lifecycle. Use the standard library.
 
-Run a single test file:
-```bash
-bash tests/run.sh tests/core/lib_test.sh
-```
+Keep shell entrypoints executable, start them with Bash and set -euo pipefail,
+quote expansions and use exec to launch Python. Avoid new shell libraries.
 
-The test framework (`tests/testlib.sh`) creates a fake `tmux` binary that simulates core commands using temp files. Tests source `testlib.sh`, set up state with helpers like `fake_tmux_register_pane` and `fake_tmux_set_tree`, then call scripts and assert results.
+Report errors with context. Do not add alternate implementations or silent
+fallback paths. Compatibility handling must be explicit.
 
-### Live testing in a separate tmux session
+## Testing and live development
 
-For integration testing against a real tmux server, use a dedicated session so you don't disrupt your work:
+Run bash tests/run.sh after changes. Add meaningful tests for new behavior.
+Python unit tests cover domain transitions and projection. Real tmux tests cover
+hooks, clients, geometry, lifecycle and rendering; a fake tmux cannot establish
+those contracts. PTY tests exercise actual terminal input and native menus.
 
-```bash
-# 1. Install the working copy into the plugin directory
-bash scripts/install-live.sh
+Every integration test must use a private socket and private state root, stop
+its server/coordinator, and remove its own temporary directory on every exit.
 
-# 2. Open a separate tmux session for testing
-tmux new-session -d -s sidebar-test
-tmux send-keys -t sidebar-test 'echo "test pane"' Enter
-
-# 3. Toggle sidebar in the test session
-tmux send-keys -t sidebar-test 'prefix' ''   # or trigger via:
-tmux run-shell -t sidebar-test "$HOME/.config/tmux/plugins/tmux-sidebar/scripts/features/sidebar/toggle-sidebar.sh"
-
-# 4. Simulate agent state updates
-bash scripts/features/state/update-pane-state.sh --pane %0 --app claude --status running
-bash scripts/features/state/update-pane-state.sh --pane %0 --app claude --status needs-input
-bash scripts/features/state/update-pane-state.sh --pane %0 --app claude --status idle
-
-# 5. Clean up
-tmux kill-session -t sidebar-test
-```
-
-To manually verify changes without install-live:
-```bash
-# Source the plugin directly in a test session
-tmux new-session -d -s sidebar-test
-tmux source-file tmux-pane-tree.conf
-```
-
-### After any code change
-
-1. Run `bash tests/run.sh` — all tests must pass
-2. If changing UI or hooks, also run `bash scripts/install-live.sh` and verify in a live tmux session
-3. If adding new functionality, add a corresponding `tests/<name>_test.sh`
-
-## Code style
-
-### Bash
-
-- Always start with `#!/usr/bin/env bash` and `set -euo pipefail`
-- Source shared code via `. "$SCRIPTS_DIR/core/lib.sh"` where `SCRIPTS_DIR` resolves to the repo `scripts/` directory
-- Use `printf` over `echo` for output
-- Quote all variable expansions: `"$var"`, `"${var:-default}"`
-- Prefer `[ condition ]` for simple tests, `[[ ]]` for pattern matching
-- Use `local` for all function variables
-- Suppress expected errors with `2>/dev/null || true`, not by removing `set -e`
-- Argument parsing uses `while [ "$#" -gt 0 ]; do case "$1" in ...` pattern
-- No unnecessary comments — code should be self-documenting
-- Functions go in `scripts/core/lib.sh` if reused across scripts
-- Use `awk` for structured text processing, not complex bash string manipulation
-- Temp files via `mktemp` with cleanup traps
-- Atomic file writes: write to tmp, then `mv`
-
-### Python
-
-- Target python3, use `from __future__ import annotations`
-- Type hints on function signatures
-- Use `pathlib.Path` over `os.path`
-- `subprocess.check_output` / `subprocess.run` for external commands
-- Constants at module top as ALL_CAPS
-- No classes unless genuinely needed — functions and module-level state
-- `shlex.quote` for shell escaping
-- Keep curses code isolated in dedicated functions
-
-### tmux plugin conventions
-
-- `tmux-pane-tree.conf` is the primary tmux config that registers hooks and keybindings
-- TPM execs every top-level `*.tmux` in the plugin dir, so each one is a polyglot (bash + tmux conf) committed `100755`, and config meant only to be sourced uses `.conf`. Only `sidebar.tmux` applies the conf from its bash branch; `tmux-pane-tree.tmux` execs to `exit 0` so TPM applies the config once. Both source the conf when read by `source-file`
-- `sidebar.conf` is the legacy config, kept for `install-live.sh` compatibility patching
-- Use `#{d:current_file}` for relative paths in hook registrations
-- Hook indices (e.g. `[198]`) are namespaced to avoid collisions with other plugins
-- State stored in tmux global options prefixed `@tmux_sidebar_` (also accepts `@tmux_pane_tree_` prefix)
-- Per-window state keyed by window ID: `@tmux_sidebar_{suffix}_w{ID}`
-- Background execution via `run-shell -b` to avoid blocking tmux
-
-### Testing conventions
-
-- One test file per script/feature, named `<script>_test.sh`
-- Group tests under `tests/<area>/` to match the feature or subsystem they cover
-- Test files source `testlib.sh` which provides the fake tmux and assertions
-- Use `fake_tmux_register_pane`, `fake_tmux_set_tree`, `fake_tmux_no_sidebar` to set up state
-- Use `run_script` to execute a script and capture output into `$output`
-- Assertions: `assert_eq`, `assert_contains`, `assert_not_contains`, `assert_file_contains`, `assert_file_not_contains`
-- Each test is a function called directly — no test framework dependencies
-- Reset state between tests with `fake_tmux_no_sidebar`
-
-### General
-
-- No fallback logic unless explicitly requested
-- Fail fast — `set -euo pipefail` in bash, no silent error swallowing
-- Separation of concerns: `scripts/core/lib.sh` for shared bash logic, `scripts/core/hook-lib.sh`, `scripts/core/hook-parser.py`, and `scripts/core/hook-metadata.py` for shared hook parsing, `scripts/ui/sidebar-ui.py` as the UI entrypoint, and `scripts/ui/sidebar_ui_lib/` for focused Python UI modules
-- Atomic state mutations — write to temp file then `mv` to avoid partial reads
-- Mutex via `sidebar_lock_acquire` / `sidebar_lock_release` for operations that race (e.g. ensure-sidebar-pane). Register the release trap *before* acquiring; releasing a lock you do not hold is a no-op. Never use `tmux wait-for` as a mutex — it lives in the server and outlives the process that took it
+Never test new UI or hooks in the user's sessions. Use isolated servers first.
+For the symlinked development checkout, run bash scripts/reload-live.sh after
+validation. It loads code and restarts views while preserving content panes.
+Agent hook installation is separate and opt-in.

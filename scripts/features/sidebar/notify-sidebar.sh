@@ -1,20 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-SCRIPTS_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
-. "$SCRIPTS_DIR/core/lib.sh"
-
-target_pane="${1:-}"
-enabled="$(tmux show-options -gv @tmux_sidebar_enabled 2>/dev/null || printf '0\n')"
-[ "$enabled" = "1" ] || exit 0
-
-if [ -n "$target_pane" ]; then
-  width_sync_lock='@tmux_sidebar_width_sync'
-  trap 'sidebar_lock_release "$width_sync_lock"' EXIT
-  sidebar_lock_acquire "$width_sync_lock"
-  sync_sidebar_width_from_pane "$target_pane"
-  invalidate_sidebar_snapshot_for_resized_pane "$target_pane"
-fi
-
-signal_sidebar_refresh
+exec python3 "$SCRIPT_DIR/../../binder.py" compat "notify-sidebar.sh" "$@"

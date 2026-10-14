@@ -16,15 +16,39 @@ fail() {
   exit 1
 }
 
-REAL_TMUX_BIN="$(
-  PATH="/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-  command -v tmux
-)" || fail 'tmux not found for real tmux integration tests'
+REAL_TMUX_BIN="$(command -v tmux)" || fail 'tmux not found for real tmux integration tests'
 export REAL_TMUX_BIN
-# run-shell helpers must not pick up a fake tmux from a prior unit-test PATH
-export PATH="/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-trap '"$REAL_TMUX_BIN" -S "$REAL_TMUX_SOCKET_PATH" kill-server 2>/dev/null || true; rm -rf "$TEST_TMP"' EXIT
+cleanup_real_tmux() {
+  local status="$?"
+  if [ "$status" != 0 ]; then
+    for log in "$REAL_TMUX_STATE_DIR"/servers/*/engine.log; do
+      [ ! -f "$log" ] || tail -n 60 "$log" >&2
+    done
+  fi
+  "$REAL_TMUX_BIN" -S "$REAL_TMUX_SOCKET_PATH" kill-server 2>/dev/null || true
+  python3 - "$REAL_TMUX_STATE_DIR" "$REAL_TMUX_SOCKET_PATH" <<'PY'
+import json, os, signal, subprocess, sys, time
+from pathlib import Path
+for path in Path(sys.argv[1]).glob('servers/*/state.json'):
+    pid = json.loads(path.read_text()).get('engine_pid')
+    if not pid:
+        continue
+    args = subprocess.run(['ps', '-p', str(pid), '-o', 'args='], capture_output=True, text=True).stdout
+    if sys.argv[2] not in args or 'binder.py' not in args:
+        continue
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        continue
+    for _ in range(60):
+        if not path.parent.joinpath('engine.sock').exists():
+            break
+        time.sleep(.05)
+PY
+  rm -rf "$TEST_TMP"
+}
+trap cleanup_real_tmux EXIT
 
 assert_contains() {
   local haystack="$1"

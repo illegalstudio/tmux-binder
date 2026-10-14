@@ -4,16 +4,27 @@ All notable project versions are documented here.
 
 ## Unreleased
 
-- Claude SubagentStart/Stop hooks now maintain a per-pane subagent count and show a dedicated `↳`-prefixed badge while subagents run, instead of being suppressed. The count resets at turn and session boundaries so a lost stop event can't pin the badge.
-- Hook wrappers opt into subagent lifecycle events via `HOOK_SUBAGENT_TRACKING`; other agents keep the previous suppression behavior.
-- The built-in hook installer now keeps only the three most recent backups per config file.
-- Recognize Claude Code builds that report their version with underscores (`2_1_201`) as `pane_current_command`, restoring claude detection for panes without hook state.
-- A `✳`-prefixed pane title now marks claude as idle, clearing stale running badges left behind by `/compact`, aborted turns, or lost Stop events.
-- Stopped treating a `delegate` permission mode as a subagent marker for non-codex apps; claude sessions in delegate mode no longer have their completion events suppressed.
-- Keep the cursor label on idle cursor-agent panes while the pane still runs the command captured in hook state, instead of falling back to `node`.
-- `hook-cursor.sh` no longer uses `mapfile`, so it survives being run by the system bash 3.2.
-- Replaced the `tmux wait-for` mutexes with pid-stamped lock files, so a hook killed mid-update no longer wedges the plugin. A `wait-for` channel lives in the tmux server and outlives its holder, so one lost release left every later pane-state, notify, action and ensure call blocked forever, piling up hundreds of stuck tmux clients.
-- Fixed TPM reporting `'~/.tmux/plugins/tpm/tpm' returned 126` on load by moving the sourced-only tmux config to `tmux-pane-tree.conf`. Existing `source-file` and `run-shell` lines keep working.
+- Rebuilt the runtime around one Python coordinator per tmux server. Native hooks,
+  cached topology and push updates replace repeated shell pipelines and per-view
+  tmux polling. Bash entrypoints and existing configuration options stay compatible.
+- Open and close the sidebar globally across all sessions and windows. New windows
+  inherit visibility, and linked windows share one sidebar pane.
+- Preserve the chosen width across windows, clients, zoom and reloads. Clamp it to
+  the minimum space needed by the complete content layout without changing the
+  saved preference.
+- Recover failed views and reconnect after coordinator failure while keeping
+  content processes. Isolate runtime state by server and server generation.
+- Add Unicode search and name prompts, persistent collapsed branches, terminal-cell
+  clipping and incremental curses drawing. Keep native context menus and layout
+  actions, with explicit client and row targets.
+- Normalize all six agent integrations centrally. Preserve subagent tracking,
+  completion suppression, focus acknowledgement and live command/title detection,
+  including Claude version commands and idle titles. Ignore cosmetic spinner
+  frames in title notifications.
+- Move agent-hook installation and removal into Python, preserve unrelated hooks
+  and retain the three latest backups per configuration file.
+- Add coordinator diagnostics, bounded logs, real tmux/PTY regressions and an idle
+  benchmark. Require Python 3.10+ with curses and tmux 3.4+; no pip packages.
 
 ## 0.3.3
 

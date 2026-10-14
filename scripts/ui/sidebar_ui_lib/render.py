@@ -1,280 +1,81 @@
 from __future__ import annotations
 
 import curses
-import json
-import os
 import re
-import shlex
-import subprocess
-from pathlib import Path
 
-from .core import STATE_DIR, tmux_option, tmux_option_value
-from .tree import find_selected_row_index, render_rows, truncate_line
+from .view import clip, display_text, width
 
 
-COLOR_PAIR_SESSION = 1
-COLOR_PAIR_WINDOW = 2
-COLOR_PAIR_PANE = 3
-DEFAULT_COLOR_FG = "ffffff"
-_HEX_COLOR_RE = re.compile(r"#([0-9a-fA-F]{6})")
-_CUBE_VALUES = [0, 95, 135, 175, 215, 255]
-_last_row_map_json = ""
+def color_number(value: str) -> int:
+    rgb = [int(value[index:index + 2], 16) for index in (0, 2, 4)]
+    levels = [0, 95, 135, 175, 215, 255]
+    red, green, blue = [min(range(6), key=lambda index: abs(levels[index] - component)) for component in rgb]
+    cube = 16 + red * 36 + green * 6 + blue
+    grey = min(range(24), key=lambda index: sum(abs(8 + index * 10 - component) for component in rgb))
+    cube_error = sum(abs(levels[index] - component) for index, component in zip((red, green, blue), rgb))
+    return 232 + grey if sum(abs(8 + grey * 10 - component) for component in rgb) < cube_error else cube
 
 
-def _scripts_dir() -> Path:
-    return Path(__file__).resolve().parents[2]
+def colors(configuration: dict, styles: dict) -> dict[str, int]:
+    result = {"session": curses.A_BOLD, "window": 0, "pane": 0}
+    if not curses.has_colors() or curses.COLORS < 256:
+        return result
+    sources = {"session": "pane-active-border-style", "window": "pane-border-style", "pane": "status-style"}
+    for index, (kind, source) in enumerate(sources.items(), 1):
+        custom = configuration.get(kind, "")
+        match = re.search(r"#?([a-fA-F0-9]{6})", custom) if custom else re.search(r"fg=#([a-fA-F0-9]{6})", styles.get(source, ""))
+        if not match:
+            continue
+        try:
+            curses.init_pair(index, color_number(match.group(1)), -1)
+            result[kind] = curses.color_pair(index) | (curses.A_BOLD if kind == "session" else 0)
+        except curses.error:
+            continue
+    return result
 
 
-def _write_row_map(rows: list[dict], scroll_offset: int) -> None:
-    global _last_row_map_json
-    sidebar_pane = os.environ.get("TMUX_PANE", "")
-    if not sidebar_pane:
-        return
-    data = {"scroll_offset": scroll_offset, "rows": []}
-    for row in rows:
-        entry: dict = {"kind": row["kind"], "session": row.get("session", "")}
-        if "window" in row:
-            entry["window"] = row["window"]
-        if "pane_id" in row:
-            entry["pane_id"] = row["pane_id"]
-        data["rows"].append(entry)
-    json_str = json.dumps(data)
-    if json_str == _last_row_map_json:
-        return
-    map_path = STATE_DIR / f"rowmap-{sidebar_pane}.json"
-    try:
-        tmp = map_path.with_suffix(".tmp")
-        tmp.write_text(json_str)
-        tmp.rename(map_path)
-        _last_row_map_json = json_str
-    except OSError:
-        # Context menus are optional; keep the sidebar interactive if state files are unavailable.
-        return
+class Renderer:
+    def __init__(self, screen) -> None:
+        self.screen = screen
+        self.previous: list[tuple] = []
+        self.size = (0, 0)
 
-
-def _run_context_menu(mouse_y: int) -> None:
-    sidebar_pane = os.environ.get("TMUX_PANE", "")
-    if not sidebar_pane:
-        return
-    menu_file = STATE_DIR / "menu-cmd.tmux"
-    try:
-        pane_metrics = subprocess.check_output(
-            ["tmux", "display-message", "-p", "-t", sidebar_pane, "#{pane_left}|#{pane_top}|#{pane_width}|#{session_name}"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-        pane_left_raw, pane_top_raw, pane_width_raw, session_name = pane_metrics.split("|", 3)
-        menu_x = str(int(pane_left_raw) + max(0, int(pane_width_raw) - 1))
-        menu_y = str(int(pane_top_raw) + max(0, mouse_y))
-        target_client = subprocess.check_output(
-            ["tmux", "list-clients", "-t", session_name, "-F", "#{client_name}"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).splitlines()[0].strip()
-        if not target_client:
-            return
-    except (subprocess.CalledProcessError, ValueError):
-        return
-    try:
-        menu_file.unlink(missing_ok=True)
-    except OSError:
-        pass
-    subprocess.run(
-        [
-            "bash",
-            str(_scripts_dir() / "features/context-menu/show-context-menu.sh"),
-            sidebar_pane,
-            str(mouse_y),
-            menu_x,
-            menu_y,
-            target_client,
-        ],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    if not menu_file.exists():
-        return
-    try:
-        menu_command = shlex.split(menu_file.read_text().strip())
-    except (OSError, ValueError):
-        return
-    if not menu_command:
-        return
-    subprocess.run(
-        ["tmux", *menu_command],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
-def parse_fg_hex(style: str) -> str:
-    match = re.search(r"fg=#([0-9a-fA-F]{6})", style)
-    return match.group(1) if match else ""
-
-
-def hex_to_256(hex_color: str) -> int:
-    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-    ri = min(range(6), key=lambda i: abs(_CUBE_VALUES[i] - r))
-    gi = min(range(6), key=lambda i: abs(_CUBE_VALUES[i] - g))
-    bi = min(range(6), key=lambda i: abs(_CUBE_VALUES[i] - b))
-    return 16 + 36 * ri + 6 * gi + bi
-
-
-def _option_hex_suffix(suffix: str) -> str:
-    raw = tmux_option_value(suffix)
-    if raw:
-        match = _HEX_COLOR_RE.search(raw)
-        return match.group(1) if match else ""
-    return ""
-
-
-def _define_color(slot: int, hex_color: str) -> int:
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-    if curses.can_change_color():
-        curses.init_color(slot, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
-        return slot
-    return hex_to_256(hex_color)
-
-
-def _parse_border_format_colors() -> dict[str, str]:
-    fmt = tmux_option("pane-border-format")
-    colors: dict[str, str] = {}
-    pattern = r"#\{\?pane_active,#\[fg=#([0-9a-fA-F]{6})\],#\[fg=#([0-9a-fA-F]{6})\]\}"
-    matches = list(re.finditer(pattern, fmt))
-    if matches:
-        colors["inactive_command"] = matches[0].group(2)
-    if len(matches) > 1:
-        colors["active_path"] = matches[1].group(1)
-    return colors
-
-
-def init_sidebar_colors() -> tuple[int, int, int, int]:
-    try:
-        if curses.COLORS < 256:
-            return curses.A_BOLD, 0, 0, 0
-    except AttributeError:
-        return curses.A_BOLD, 0, 0, 0
-    fmt_colors = _parse_border_format_colors()
-    session_hex = (
-        _option_hex_suffix("color_session")
-        or parse_fg_hex(tmux_option("pane-active-border-style"))
-        or DEFAULT_COLOR_FG
-    )
-    window_hex = (
-        _option_hex_suffix("color_window")
-        or fmt_colors.get("inactive_command", "")
-        or parse_fg_hex(tmux_option("pane-border-style"))
-        or DEFAULT_COLOR_FG
-    )
-    pane_hex = (
-        _option_hex_suffix("color_pane")
-        or fmt_colors.get("active_path", "")
-        or parse_fg_hex(tmux_option("status-style"))
-        or DEFAULT_COLOR_FG
-    )
-    curses.init_pair(COLOR_PAIR_SESSION, _define_color(240, session_hex), -1)
-    curses.init_pair(COLOR_PAIR_WINDOW, _define_color(241, window_hex), -1)
-    curses.init_pair(COLOR_PAIR_PANE, _define_color(242, pane_hex), -1)
-    return (
-        curses.A_BOLD,
-        curses.color_pair(COLOR_PAIR_SESSION),
-        curses.color_pair(COLOR_PAIR_WINDOW),
-        curses.color_pair(COLOR_PAIR_PANE),
-    )
-
-
-def _label_start(line: str) -> int:
-    pos = line.rfind("─ ")
-    return pos + 2 if pos >= 0 else len(line)
-
-
-def render_screen(
-    stdscr,
-    rows: list[dict],
-    selected_pane_id: str,
-    scroll_offset: int = 0,
-    search_query: str = "",
-    search_matches: set[int] | None = None,
-    search_mode: bool = False,
-    active_attr: int = curses.A_BOLD,
-    session_attr: int = 0,
-    window_attr: int = 0,
-    pane_attr: int = 0,
-) -> None:
-    try:
-        _draw_screen(
-            stdscr, rows, selected_pane_id, scroll_offset, search_query, search_matches,
-            search_mode, active_attr, session_attr, window_attr, pane_attr,
-        )
-    except curses.error:
-        return
-    stdscr.refresh()
-
-
-def _draw_screen(
-    stdscr,
-    rows: list[dict],
-    selected_pane_id: str,
-    scroll_offset: int,
-    search_query: str,
-    search_matches: set[int] | None,
-    search_mode: bool,
-    active_attr: int,
-    session_attr: int,
-    window_attr: int,
-    pane_attr: int,
-) -> None:
-    width = max(0, curses.COLS - 1)
-    has_search_bar = search_mode or bool(search_query)
-    visible_lines = curses.LINES - (1 if has_search_bar else 0)
-    if width > 0:
-        blank_line = " " * width
-        for y in range(max(0, curses.LINES)):
-            stdscr.addnstr(y, 0, blank_line, width)
-    rendered = render_rows(rows, selected_pane_id, width)
-    selected_row = find_selected_row_index(rows, selected_pane_id)
-    match_attr = getattr(curses, "A_ITALIC", curses.A_UNDERLINE)
-    visible = rendered[scroll_offset:scroll_offset + visible_lines]
-    for y, line in enumerate(visible):
-        if y >= visible_lines:
-            break
-        row_idx = y + scroll_offset
-        row = rows[row_idx] if row_idx < len(rows) else None
-        kind = row["kind"] if row else None
-        is_selected = selected_row is not None and row_idx == selected_row
-        is_match = bool(search_matches) and row_idx in search_matches
-        label_start = _label_start(line)
-        stdscr.addnstr(y, 0, line[:label_start], width)
-        remaining = width - label_start
-        if remaining > 0 and label_start < len(line):
-            label = line[label_start:]
-            if is_selected:
-                attr = active_attr | (match_attr if is_match else 0)
-            elif kind == "session":
-                attr = session_attr | (match_attr if is_match else 0)
-            elif kind == "window":
-                attr = window_attr | (match_attr if is_match else 0)
-            else:
-                attr = pane_attr | (match_attr if is_match else 0)
-            stdscr.addnstr(y, label_start, label, remaining, attr)
-    if has_search_bar:
-        prompt = f"/{search_query}"
-        prompt_line = curses.LINES - 1
-        stdscr.addnstr(
-            prompt_line,
-            0,
-            truncate_line(prompt, width),
-            width,
-            0 if search_mode else curses.A_DIM,
-        )
-        if search_mode:
-            curses.curs_set(1)
-            stdscr.move(prompt_line, min(len(prompt), width - 1))
-        else:
-            curses.curs_set(0)
-    else:
-        curses.curs_set(0)
+    def draw(self, rows: list[dict], selected: str, scroll: int, attributes: dict[str, int], query: str = "", footer: str = "", cursor: bool = False, collapsed: set[str] | None = None) -> None:
+        height, columns = self.screen.getmaxyx()
+        cells = max(0, columns - 1)
+        lines = height - bool(footer)
+        frame = []
+        for row in rows[scroll:scroll + max(0, lines)]:
+            text = display_text(row["text"])
+            if collapsed and row["key"] in collapsed:
+                text += " …"
+            text = clip(("▶ " if row["key"] == selected else "  ") + text, cells)
+            attribute = curses.A_BOLD if row["key"] == selected else attributes.get(row["kind"], 0)
+            if query and query.casefold() in text.casefold():
+                attribute |= curses.A_UNDERLINE
+            frame.append((text, attribute))
+        while len(frame) < max(0, lines):
+            frame.append(("", 0))
+        if footer and height:
+            frame.append((clip(display_text(footer), cells), 0 if cursor else curses.A_DIM))
+        resized = self.size != (height, columns)
+        for y, item in enumerate(frame):
+            if resized or y >= len(self.previous) or self.previous[y] != item:
+                text, attr = item
+                try:
+                    self.screen.move(y, 0)
+                    self.screen.clrtoeol()
+                    if cells > 0:
+                        self.screen.addstr(y, 0, text, attr)
+                except curses.error:
+                    continue
+        try:
+            curses.curs_set(1 if cursor else 0)
+            if cursor and height and cells:
+                self.screen.move(height - 1, min(width(footer), cells - 1))
+            self.screen.noutrefresh()
+            curses.doupdate()
+        except curses.error:
+            pass
+        self.previous = frame
+        self.size = (height, columns)

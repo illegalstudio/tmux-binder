@@ -1,0 +1,336 @@
+[
+  {
+    "app": "claude",
+    "event": "",
+    "payload": {
+      "hook_event_name": "Notification",
+      "message": "Need input"
+    },
+    "status": "needs-input"
+  },
+  {
+    "app": "claude",
+    "event": "",
+    "payload": {
+      "hook_event_name": "Notification",
+      "notification_type": "idle_prompt"
+    },
+    "status": "idle"
+  },
+  {
+    "app": "claude",
+    "event": "",
+    "payload": {
+      "hook_event_name": "SessionStart"
+    },
+    "status": "idle"
+  },
+  {
+    "app": "claude",
+    "event": "",
+    "payload": {
+      "hook_event_name": "UserPromptSubmit"
+    },
+    "status": "running"
+  },
+  {
+    "app": "claude",
+    "event": "",
+    "payload": {
+      "hook_event_name": "SubagentStop",
+      "message": "Finished subagent task"
+    },
+    "status": "running"
+  },
+  {
+    "app": "claude",
+    "event": "",
+    "payload": {
+      "hook_event_name": "SubagentStart",
+      "message": "Delegating"
+    },
+    "status": "running"
+  },
+  {
+    "app": "claude",
+    "event": "",
+    "payload": {
+      "hook_event_name": "Stop",
+      "message": "Finished task"
+    },
+    "status": "done"
+  },
+  {
+    "app": "codex",
+    "event": "agent-turn-complete",
+    "payload": {
+      "summary": "Finished task"
+    },
+    "status": "done"
+  },
+  {
+    "app": "codex",
+    "event": "task_started",
+    "payload": {
+      "session_id": "worker-9",
+      "permission_mode": "delegate",
+      "summary": "Starting delegated task"
+    },
+    "status": "running"
+  },
+  {
+    "app": "codex",
+    "event": "",
+    "payload": {
+      "session_id": "worker-9",
+      "notification_type": "permission_prompt",
+      "message": "Need approval"
+    },
+    "status": "needs-input"
+  },
+  {
+    "app": "codex",
+    "event": "",
+    "payload": {
+      "notification_type": "permission_prompt",
+      "message": "Need approval"
+    },
+    "status": "needs-input"
+  },
+  {
+    "app": "codex",
+    "event": "",
+    "payload": {
+      "notification_type": "idle_prompt"
+    },
+    "status": "idle"
+  },
+  {
+    "app": "codex",
+    "event": "",
+    "payload": {
+      "status": "running"
+    },
+    "status": "running"
+  },
+  {
+    "app": "codex",
+    "event": "task_started",
+    "payload": {
+      "summary": "Starting work"
+    },
+    "status": "running"
+  },
+  {
+    "app": "codex",
+    "event": "session-start",
+    "payload": {
+      "summary": "Ready"
+    },
+    "status": "idle"
+  },
+  {
+    "app": "opencode",
+    "event": "",
+    "payload": {
+      "event": "session.created",
+      "status": "ready",
+      "message": "Ready"
+    },
+    "status": "idle"
+  },
+  {
+    "app": "opencode",
+    "event": "",
+    "payload": {
+      "event": "permission.asked",
+      "message": "Need approval"
+    },
+    "status": "needs-input"
+  },
+  {
+    "app": "opencode",
+    "event": "",
+    "payload": {
+      "status": "running",
+      "message": "Working"
+    },
+    "status": "running"
+  },
+  {
+    "app": "opencode",
+    "event": "",
+    "payload": {
+      "event": "session.status",
+      "message": "Working"
+    },
+    "status": "running"
+  },
+  {
+    "app": "opencode",
+    "event": "",
+    "payload": {
+      "event": "session.idle",
+      "message": "Ready"
+    },
+    "status": "done"
+  },
+  {
+    "app": "pi",
+    "event": "",
+    "payload": {
+      "event": "agent_start",
+      "message": "Working"
+    },
+    "status": "running"
+  },
+  {
+    "app": "pi",
+    "event": "",
+    "payload": {
+      "event": "needs_input",
+      "message": "Need approval"
+    },
+    "status": "needs-input"
+  },
+  {
+    "app": "kiro",
+    "event": "",
+    "payload": {
+      "hook_event_name": "stop",
+      "message": "Finished"
+    },
+    "status": "done"
+  },
+  {
+    "app": "kiro",
+    "event": "",
+    "payload": {
+      "hook_event_name": "preToolUse",
+      "tool_name": "write"
+    },
+    "status": "running"
+  },
+  {
+    "app": "kiro",
+    "event": "",
+    "payload": {
+      "hook_event_name": "agentSpawn"
+    },
+    "status": "idle"
+  },
+  {
+    "app": "cursor",
+    "event": "",
+    "payload": {
+      "hook_event_name": "sessionStart",
+      "workspace_roots": [
+        "/work/project"
+      ],
+      "agent_message": "Ready"
+    },
+    "status": "idle"
+  },
+  {
+    "app": "cursor",
+    "event": "",
+    "payload": {
+      "hook_event_name": "sessionEnd",
+      "workspace_roots": [
+        "/work/project"
+      ],
+      "agent_message": "Done"
+    },
+    "status": "idle"
+  },
+  {
+    "app": "cursor",
+    "event": "",
+    "payload": {
+      "hook_event_name": "beforeSubmitPrompt",
+      "workspace_roots": [
+        "/work/project"
+      ],
+      "agent_message": "Starting"
+    },
+    "status": "running"
+  },
+  {
+    "app": "cursor",
+    "event": "",
+    "payload": {
+      "hook_event_name": "stop",
+      "workspace_roots": [
+        "/work/project"
+      ],
+      "status": "completed",
+      "agent_message": "Finished task"
+    },
+    "status": "done"
+  },
+  {
+    "app": "cursor",
+    "event": "",
+    "payload": {
+      "hook_event_name": "stop",
+      "workspace_roots": [
+        "/work/project"
+      ],
+      "status": "aborted",
+      "agent_message": "Stopped"
+    },
+    "status": "idle"
+  },
+  {
+    "app": "cursor",
+    "event": "",
+    "payload": {
+      "hook_event_name": "stop",
+      "workspace_roots": [
+        "/work/project"
+      ],
+      "status": "error",
+      "agent_message": "Crashed"
+    },
+    "status": "error"
+  },
+  {
+    "app": "cursor",
+    "event": "",
+    "payload": {
+      "hook_event_name": "postToolUseFailure",
+      "workspace_roots": [
+        "/work/project"
+      ],
+      "failure_type": "permission_denied",
+      "error_message": "Need approval"
+    },
+    "status": "needs-input"
+  },
+  {
+    "app": "cursor",
+    "event": "",
+    "payload": {
+      "hook_event_name": "postToolUseFailure",
+      "workspace_roots": [
+        "/work/project"
+      ],
+      "failure_type": "timeout",
+      "error_message": "Timed out"
+    },
+    "status": "error"
+  },
+  {
+    "app": "cursor",
+    "event": "",
+    "payload": {
+      "hook_event_name": "postToolUseFailure",
+      "workspace_roots": [
+        "/work/project"
+      ],
+      "failure_type": "error",
+      "error_message": "Exploded"
+    },
+    "status": "error"
+  }
+]

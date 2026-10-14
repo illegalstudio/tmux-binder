@@ -1,0 +1,736 @@
+from __future__ import annotations
+
+import logging
+import json
+import os
+import re
+import shlex
+import sys
+import time
+from typing import Callable
+
+from .agents import AgentStore, live_agent_app, terminal_status
+from .config import enabled, integer, option, parse_options, shortcuts, visuals
+from .model import Model, project_rows
+from .runtime import ENTRYPOINT, ROOT, Identity, atomic_json, read_json, state_home
+from .tmux import Tmux, TmuxError
+
+RECONCILE_SECONDS = 30.0
+AGENT_SAMPLE_SECONDS = 1.0
+EVENT_CHANNEL = "tmux-binder-events"
+# Explicit members avoid locale-dependent Unicode range collation in tmux regexes.
+TITLE_FORMAT = "#{s/^[" + "".join(chr(code) for code in range(0x2800, 0x2900)) + "]/⠿/:pane_title}"
+
+
+class Application:
+    def __init__(self, identity: Identity, emit: Callable[[str, dict], None]) -> None:
+        self.identity = identity
+        self.tmux = Tmux(identity.socket_path)
+        version = self.tmux.run("display-message", "-p", "#{version}")
+        release = re.match(r"(\d+)\.(\d+)", version)
+        if release and tuple(map(int, release.groups())) < (3, 4):
+            raise RuntimeError("tmux-binder requires tmux 3.4+ for native mouse menus")
+        self.emit = emit
+        saved = read_json(identity.directory / "state.json")
+        preferences = read_json(identity.preferences)
+        self.agents = AgentStore(saved.get("agents", {}), set(saved.get("delegated", [])))
+        self.window_state: dict[str, dict] = saved.get("windows", {})
+        self.window_main: dict[str, str] = saved.get("window_main", {})
+        self.client_main: dict[str, str] = saved.get("client_main", {})
+        self.view_state: dict[str, dict] = saved.get("views", {})
+        self.window_client: dict[str, str] = {}
+        self.options = parse_options(self.tmux.run("show-options", "-g"))
+        self.icons, self.badges = visuals(self.options)
+        self.preferred_width = integer(option(self.options, "width"), integer(str(preferences.get("width", "")), 25, 1), 1)
+        if not option(self.options, "width") and not preferences:
+            legacy = state_home() / "sidebar-width.txt"
+            if legacy.exists():
+                self.preferred_width = integer(legacy.read_text().strip(), 25, 1)
+        self.model = Model.from_records(self.tmux.snapshot())
+        self.is_open = self.model.globals.get("@tmux_sidebar_enabled") == "1"
+        self.rows: list[dict] = []
+        self.captures: dict[str, str] = {}
+        self.programmatic: set[str] = set()
+        self.respawns: dict[str, list[float]] = {}
+        self.errors: dict[str, str] = {}
+        self.revision = 0
+        self.rendered: dict[str, int] = {}
+        self.row_maps: dict[str, dict] = {}
+        self.navigations: list[dict] = []
+        self.next_reconcile = time.monotonic() + RECONCILE_SECONDS
+        self.next_sample = 0.0
+        self.last_event = "startup"
+        self.events = 0
+        self.last_publication: tuple = ()
+        self.saved_json = ""
+        self.ui_command = "exec " + shlex.join([sys.executable, str(ROOT / "scripts/ui/sidebar-ui.py")])
+        self._import_legacy()
+        self.install_bindings()
+        self.refresh()
+
+    def _import_legacy(self) -> None:
+        for window_id, window in self.model.windows.items():
+            suffix = "_w" + window_id.lstrip("@")
+            layout = self.options.get("@tmux_sidebar_layout" + suffix, "")
+            panes = self.options.get("@tmux_sidebar_panes" + suffix, "")
+            if layout and panes and window_id not in self.window_state:
+                self.window_state[window_id] = {"layout": layout, "panes": sorted(panes.split(","))}
+        if self.agents.panes or not self.identity.socket_path.endswith("/default"):
+            return
+        for pane_id, pane in self.model.panes.items():
+            path = state_home() / f"pane-{pane_id}.json"
+            try:
+                old = read_json(path)
+            except ValueError:
+                logging.warning("Ignoring invalid legacy state %s", path)
+                continue
+            if old and old.get("window_id") == pane["window_id"]:
+                self.agents.panes[pane_id] = old
+
+    def save(self) -> None:
+        data = {
+            "engine_pid": os.getpid(),
+            "agents": self.agents.panes, "delegated": sorted(self.agents.delegated), "windows": self.window_state,
+            "window_main": self.window_main, "client_main": self.client_main,
+            "views": self.view_state,
+        }
+        serialized = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        if serialized != self.saved_json:
+            atomic_json(self.identity.directory / "state.json", data)
+            self.saved_json = serialized
+
+    def _set_open(self, value: bool) -> None:
+        self.is_open = value
+        self.tmux.run("set-option", "-g", "@tmux_sidebar_enabled", "1" if value else "0")
+
+    def _remember_width(self, width: int) -> None:
+        if width == self.preferred_width:
+            return
+        self.preferred_width = width
+        self.options["@tmux_pane_tree_width"] = str(width)
+        self.tmux.run("set-option", "-g", "@tmux_pane_tree_width", str(width))
+        atomic_json(self.identity.preferences, {"width": width})
+        path = state_home() / "sidebar-width.txt"
+        temporary = path.with_name(path.name + f".new.{os.getpid()}")
+        try:
+            temporary.write_text(str(width) + "\n")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _update_main(self) -> None:
+        for window_id in self.model.windows:
+            content = self.model.content(window_id)
+            active = next((pane for pane in content if pane["pane_active"] == "1"), None)
+            if active:
+                self.window_main[window_id] = active["pane_id"]
+            elif self.window_main.get(window_id) not in self.model.panes and content:
+                self.window_main[window_id] = content[0]["pane_id"]
+        for client_id, client in self.model.clients.items():
+            pane = self.model.panes.get(client["pane_id"], {})
+            if pane and not pane["sidebar"]:
+                self.client_main[client_id] = pane["pane_id"]
+            known = self.window_client.get(client["window_id"], "")
+            if known not in self.model.clients or self.model.clients[known]["window_id"] != client["window_id"]:
+                self.window_client[client["window_id"]] = client_id
+
+    def read_options(self) -> None:
+        options = parse_options(self.tmux.run("show-options", "-g"))
+        visual_keys = lambda values: {key: value for key, value in values.items() if "_icon_" in key or "_badge_" in key}
+        try:
+            if visual_keys(options) != visual_keys(self.options):
+                icons, badges = visuals(options)
+            else:
+                icons, badges = self.icons, self.badges
+        except ValueError as error:
+            message = str(error)
+            if self.errors.get("configuration") != message:
+                logging.error("Rejected configuration change: %s", message)
+                self.emit("notice", {"type": "notice", "error": message})
+            self.errors["configuration"] = message
+            return
+        self.errors.pop("configuration", None)
+        self.options = options
+        self.icons, self.badges = icons, badges
+
+    def refresh(self, reconcile: bool = True) -> None:
+        previous = self.model
+        self.read_options()
+        configured_width = integer(option(self.options, "width"), self.preferred_width, 1)
+        if configured_width != self.preferred_width:
+            self._remember_width(configured_width)
+            commands = []
+            for wid, window in self.model.windows.items():
+                pid = self.model.sidebar(wid)
+                if pid and window["window_zoomed_flag"] != "1":
+                    commands.append(["resize-pane", "-t", pid, "-x", str(min(configured_width, max(1, self.model.available_sidebar_width(wid))))])
+                    self.programmatic.add(wid)
+            self.tmux.batch(commands)
+        self.model = Model.from_records(self.tmux.snapshot())
+        resized_pane = self.model.globals.get("@tmux_pane_tree_resized_pane", "")
+        if resized_pane:
+            resized = self.model.panes.get(resized_pane, {})
+            if resized and not resized["sidebar"]:
+                self.window_state.get(resized["window_id"], {})["layout"] = ""
+            self.tmux.run("set-option", "-gu", "@tmux_pane_tree_resized_pane")
+        self.is_open = self.model.globals.get("@tmux_sidebar_enabled") == "1"
+        self._update_main()
+        focus_pane = self.model.globals.get("@tmux_pane_tree_focus_pane", "")
+        if focus_pane:
+            focused = self.model.panes.get(focus_pane, {})
+            focus_client = self.model.globals.get("@tmux_pane_tree_focus_client", "")
+            client = self.model.clients.get(focus_client, {})
+            if focused and not focused["sidebar"] and focused["pane_active"] == "1" and self.model.visible(focused["window_id"]) and (not client or client["window_id"] == focused["window_id"]):
+                self.agents.acknowledge(focus_pane)
+            if client and focused and client["window_id"] == focused["window_id"]:
+                self.window_client[focused["window_id"]] = focus_client
+            self.tmux.batch([["set-option", "-gu", "@tmux_pane_tree_focus_pane"], ["set-option", "-gu", "@tmux_pane_tree_focus_client"]])
+        missing = [pane for pane in previous.panes.values() if pane["sidebar"] and pane["pane_id"] not in self.model.panes and pane["window_id"] in self.model.windows]
+        if missing and self.is_open:
+            self.close()
+            return
+        for pane_id in list(self.agents.panes):
+            if pane_id not in self.model.panes:
+                del self.agents.panes[pane_id]
+        for window_id in list(self.window_state):
+            if window_id not in self.model.windows:
+                del self.window_state[window_id]
+        for values in (self.window_main, self.window_client, self.view_state):
+            for window_id in set(values) - self.model.windows.keys():
+                del values[window_id]
+        self.client_main = {client: pane for client, pane in self.client_main.items() if client in self.model.clients}
+        changed = False
+        if reconcile and self.is_open:
+            changed = self.ensure_all()
+            changed = self.sync_geometry() or changed
+            changed = self.recover_views() or changed
+        if changed:
+            self.model = Model.from_records(self.tmux.snapshot())
+            self._update_main()
+            self._record_geometry()
+        rows = project_rows(self.model, self.agents.panes, self.options, self.icons, self.badges, self.captures)
+        context = tuple((pid, pane["pane_active"], self.window_main.get(pane["window_id"], ""), self.window_client.get(pane["window_id"], ""), self.model.visible(pane["window_id"])) for pid, pane in self.model.panes.items() if pane["sidebar"])
+        publication = (context, shortcuts(self.options), option(self.options, "scrolloff"), {kind: option(self.options, "color_" + kind) for kind in ("session", "window", "pane")}, tuple(self.model.globals.get(key, "") for key in ("pane-active-border-style", "pane-border-style", "status-style", "pane-border-format")))
+        if rows != self.rows or publication != self.last_publication:
+            self.rows = rows
+            self.last_publication = publication
+            self.revision += 1
+            self.publish()
+        self.save()
+        self.next_reconcile = time.monotonic() + RECONCILE_SECONDS
+
+    def _record_geometry(self) -> None:
+        for window_id, window in self.model.windows.items():
+            pane = self.model.panes.get(self.model.sidebar(window_id))
+            if not pane or window["window_zoomed_flag"] == "1":
+                continue
+            state = self.window_state.setdefault(window_id, {})
+            state["geometry"] = [int(pane["pane_width"]), int(window["window_width"])]
+            state["zoomed"] = False
+        self.programmatic.clear()
+
+    def ensure_all(self, focus_window: str = "") -> bool:
+        created = False
+        for window_id, window in self.model.windows.items():
+            if self.model.sidebar(window_id):
+                continue
+            content = self.model.content(window_id)
+            signature = [window["window_width"], window["window_height"], window["window_layout"], self.preferred_width]
+            if self.window_state.get(window_id, {}).get("blocked") == signature:
+                continue
+            available = self.model.available_sidebar_width(window_id)
+            if not content or available < 1:
+                continue
+            target = content[0]["pane_id"]
+            active = next((pane["pane_id"] for pane in content if pane["pane_active"] == "1"), target)
+            self.window_state[window_id] = {"layout": window["window_layout"], "panes": sorted(pane["pane_id"] for pane in content)}
+            width = str(min(self.preferred_width, available))
+            try:
+                pane_id = self.tmux.run("split-window", "-t", target, "-h", "-b", "-d", "-f", "-l", width, "-P", "-F", "#{pane_id}", self.ui_command)
+            except TmuxError as error:
+                if "no space" not in str(error) and "pane too small" not in str(error):
+                    raise
+                self.window_state[window_id]["blocked"] = signature
+                self.errors[window_id] = str(error)
+                logging.warning("Sidebar does not fit in %s: %s", window_id, error)
+                continue
+            self.errors.pop(window_id, None)
+            self.tmux.batch([
+                ["set-option", "-p", "-t", pane_id, "@tmux_sidebar_owned", "1"],
+                ["set-option", "-p", "-t", pane_id, "allow-set-title", "off"],
+                ["set-option", "-p", "-t", pane_id, "remain-on-exit", "on"],
+                ["select-pane", "-t", pane_id, "-T", "Sidebar"],
+            ])
+            if focus_window == window_id:
+                self.tmux.run("select-pane", "-t", pane_id)
+            elif window["window_zoomed_flag"] == "1":
+                self.tmux.run("resize-pane", "-Z", "-t", active)
+            self.programmatic.add(window_id)
+            created = True
+        return created
+
+    def sync_geometry(self) -> bool:
+        commands: list[list[str]] = []
+        new_preference = 0
+        for window_id, window in self.model.windows.items():
+            pane_id = self.model.sidebar(window_id)
+            pane = self.model.panes.get(pane_id)
+            if not pane:
+                continue
+            state = self.window_state.setdefault(window_id, {})
+            if window["window_zoomed_flag"] == "1":
+                state["zoomed"] = True
+                continue
+            geometry = [int(pane["pane_width"]), int(window["window_width"])]
+            prior = state.get("geometry")
+            content = sorted(item["pane_id"] for item in self.model.content(window_id))
+            topology_changed = "panes" in state and state["panes"] != content
+            if topology_changed:
+                state["layout"] = ""
+                state["panes"] = content
+            automatic = state.get("zoomed") or topology_changed or (prior and prior[1] != geometry[1])
+            if window_id not in self.programmatic and prior and not automatic and prior[0] != geometry[0]:
+                new_preference = geometry[0]
+            elif automatic and geometry[0] != min(self.preferred_width, max(1, self.model.available_sidebar_width(window_id))):
+                commands.append(["resize-pane", "-t", pane_id, "-x", str(min(self.preferred_width, max(1, self.model.available_sidebar_width(window_id))))])
+                self.programmatic.add(window_id)
+            state["geometry"] = geometry
+            state["zoomed"] = False
+        if new_preference:
+            self._remember_width(new_preference)
+            for window_id, window in self.model.windows.items():
+                pane_id = self.model.sidebar(window_id)
+                if not pane_id or window["window_zoomed_flag"] == "1":
+                    continue
+                width = min(self.preferred_width, max(1, self.model.available_sidebar_width(window_id)))
+                if int(self.model.panes[pane_id]["pane_width"]) != width:
+                    commands.append(["resize-pane", "-t", pane_id, "-x", str(width)])
+                    self.programmatic.add(window_id)
+        if commands:
+            self.tmux.batch(commands)
+        return bool(commands)
+
+    def recover_views(self) -> bool:
+        changed = False
+        for pane_id, pane in self.model.panes.items():
+            if not pane["sidebar"] or pane["pane_dead"] != "1":
+                continue
+            now = time.monotonic()
+            failures = [stamp for stamp in self.respawns.get(pane_id, []) if now - stamp < 60]
+            if len(failures) >= 3:
+                self.errors[pane_id] = "View failed three times in 60 seconds; inspect engine.log and reload"
+                continue
+            failures.append(now)
+            self.respawns[pane_id] = failures
+            logging.warning("Restarting failed sidebar %s", pane_id)
+            self.tmux.run("respawn-pane", "-k", "-t", pane_id, self.ui_command)
+            changed = True
+        return changed
+
+    def sample_agents(self) -> None:
+        if not self.is_open:
+            return
+        targets = [pane_id for pane_id, pane in self.model.panes.items() if not pane["sidebar"] and live_agent_app(pane["pane_current_command"], pane["pane_title"], self.agents.panes.get(pane_id, {})) == "codex"]
+        if not targets or not any(self.model.sidebar(window) and self.model.visible(window) for window in self.model.windows):
+            return
+        commands = []
+        for pane_id in targets:
+            commands.extend([["display-message", "-p", "BINDER-CAPTURE:" + pane_id], ["capture-pane", "-p", "-t", pane_id]])
+        output = self.tmux.batch(commands, required=False)
+        captures = {}
+        for section in output.split("BINDER-CAPTURE:")[1:]:
+            pane_id, _, capture = section.partition("\n")
+            if pane_id in targets:
+                captures[pane_id] = terminal_status(capture)
+        if captures != self.captures:
+            self.captures = captures
+            self.rows = project_rows(self.model, self.agents.panes, self.options, self.icons, self.badges, self.captures)
+            self.revision += 1
+            self.publish()
+
+    def tick(self) -> None:
+        now = time.monotonic()
+        self.tmux.reap()
+        if now >= self.next_reconcile:
+            self.refresh()
+        if now >= self.next_sample:
+            self.next_sample = now + AGENT_SAMPLE_SECONDS
+            self.sample_agents()
+        for pending in self.navigations[:]:
+            if self.rendered.get(pending["sidebar"], -1) >= pending["revision"] or now >= pending["deadline"]:
+                if pending["client"] in self.model.clients:
+                    self.tmux.batch([
+                        ["select-window", "-t", pending["session"] + ":" + pending["window"]],
+                        ["switch-client", "-c", pending["client"], "-t", pending["session"]],
+                    ])
+                self.navigations.remove(pending)
+                self.refresh()
+
+    def view_message(self, pane_id: str) -> dict:
+        pane = self.model.panes.get(pane_id, {})
+        window = pane.get("window_id", "")
+        return {
+            "type": "snapshot", "revision": self.revision, "rows": self.rows,
+            "main": self.window_main.get(window, ""), "focused": pane.get("pane_active") == "1",
+            "client": self.window_client.get(window, ""),
+            "visible": self.model.visible(window), "shortcuts": shortcuts(self.options),
+            "scrolloff": integer(option(self.options, "scrolloff"), 8),
+            "colors": {key: option(self.options, "color_" + key) for key in ("session", "window", "pane")},
+            "styles": {key: self.model.globals.get(key, "") for key in ("pane-active-border-style", "pane-border-style", "status-style", "pane-border-format")}, "open": self.is_open,
+            "view_state": self.view_state.get(window, {}),
+        }
+
+    def publish(self) -> None:
+        self.emit("snapshots", {})
+
+    def client_for(self, pane_id: str, explicit: str = "") -> str:
+        if explicit:
+            if explicit not in self.model.clients:
+                raise ValueError("Originating tmux client is no longer attached")
+            return explicit
+        window = self.model.panes.get(pane_id, {}).get("window_id", "")
+        client = self.window_client.get(window, "")
+        if client in self.model.clients and self.model.clients[client]["window_id"] == window:
+            return client
+        candidates = [item for item in self.model.clients.values() if item["window_id"] == window]
+        return max(candidates, key=lambda item: int(item.get("client_activity") or 0))["client_name"] if candidates else ""
+
+    def toggle(self, pane: str = "", window: str = "", client: str = "") -> None:
+        self.read_options()
+        if self.is_open:
+            self.close()
+            return
+        self._set_open(True)
+        window = window or self.model.panes.get(pane, {}).get("window_id", "")
+        if client:
+            self.window_client[window] = client
+        if pane in self.model.panes and not self.model.panes[pane]["sidebar"]:
+            self.window_main[window] = pane
+            if client:
+                self.client_main[client] = pane
+        focus = window if enabled(option(self.options, "focus_on_open"), True) else ""
+        self.ensure_all(focus)
+        self.refresh(False)
+        self._record_geometry()
+        self.save()
+
+    def close(self) -> None:
+        self._set_open(False)
+        commands = [["kill-pane", "-t", pane_id] for pane_id, pane in self.model.panes.items() if pane["sidebar"]]
+        self.tmux.batch(commands, required=False)
+        self.model = Model.from_records(self.tmux.snapshot())
+        layouts = []
+        for window_id, state in self.window_state.items():
+            panes = sorted(pane["pane_id"] for pane in self.model.content(window_id))
+            if window_id in self.model.windows and panes == state.get("panes") and state.get("layout"):
+                layouts.append(["select-layout", "-t", window_id, state["layout"]])
+        self.tmux.batch(layouts, required=False)
+        self.window_state.clear()
+        self.programmatic.clear()
+        self.refresh(False)
+
+    def focus(self, pane: str, window: str = "", client: str = "") -> None:
+        if not self.is_open:
+            self.toggle(pane, window, client)
+            return
+        if self.model.panes.get(pane, {}).get("sidebar"):
+            self.focus_main(pane, client)
+            return
+        window = window or self.model.panes.get(pane, {}).get("window_id", "")
+        if client:
+            self.window_client[window] = client
+        self.window_main[window] = pane
+        if client:
+            self.client_main[client] = pane
+        self.ensure_all()
+        self.refresh(False)
+        sidebar = self.model.sidebar(window)
+        if sidebar:
+            self.tmux.run("select-pane", "-t", sidebar)
+        self.refresh(False)
+
+    def focus_main(self, sidebar: str, client: str = "") -> None:
+        client = self.client_for(sidebar, client)
+        window = self.model.panes.get(sidebar, {}).get("window_id", "")
+        target = self.client_main.get(client, "")
+        if target not in self.model.panes:
+            target = self.window_main.get(window, "")
+        if target in self.model.panes:
+            self.tmux.run("select-pane", "-t", target)
+            self.agents.acknowledge(target)
+        self.refresh(False)
+
+    def activate(self, source: str, row: dict, client: str = "") -> None:
+        client = self.client_for(source, client)
+        if row.get("session_id") not in self.model.sessions:
+            raise ValueError("Selected session no longer exists")
+        if row["kind"] == "session":
+            if client:
+                self.tmux.run("switch-client", "-c", client, "-t", row["session_id"])
+            self.refresh()
+            return
+        window = row["window"]
+        content = self.model.content(window)
+        target = row.get("pane_id", "")
+        if not target.startswith("%"):
+            target = self.window_main.get(window, "") or (content[0]["pane_id"] if content else "")
+        if target not in self.model.panes:
+            raise ValueError("Selected pane no longer exists")
+        self.window_main[window] = target
+        if client:
+            self.client_main[client] = target
+        self.agents.acknowledge(target)
+        self.tmux.batch([["select-pane", "-t", target], ["set-option", "-g", "@tmux_sidebar_main_pane", target]])
+        self.refresh(False)
+        self.navigations.append({"sidebar": self.model.sidebar(window), "revision": self.revision, "deadline": time.monotonic() + 0.4, "client": client, "session": row["session_id"], "window": window})
+        self.publish()
+
+    def handle_event(self, kind: str, pane: str = "", window: str = "", client: str = "", **unused: object) -> None:
+        self.last_event = kind
+        self.events += 1
+        if kind == "resize" and pane in self.model.panes and not self.model.panes[pane]["sidebar"]:
+            state = self.window_state.get(window, {})
+            state["layout"] = ""
+        self.refresh()
+        current = self.model.panes.get(pane)
+        origin = self.model.clients.get(client)
+        if kind == "focus" and current and current["pane_active"] == "1" and self.model.visible(current["window_id"]):
+            if origin and origin["window_id"] != current["window_id"]:
+                return
+            if client:
+                self.window_client[current["window_id"]] = client
+            if not current["sidebar"]:
+                self.window_main[current["window_id"]] = pane
+                if client:
+                    self.client_main[client] = pane
+                if self.agents.acknowledge(pane):
+                    self.refresh(False)
+
+    def update_agent(self, event: dict, pane: str = "", roots: list[str] | None = None) -> None:
+        if pane not in self.model.panes:
+            self.refresh()
+        if pane not in self.model.panes and roots:
+            matches = []
+            for pid, candidate in self.model.panes.items():
+                path = candidate["pane_current_path"]
+                for root in roots:
+                    if path == root or path.startswith(root.rstrip("/") + "/") or root.startswith(path.rstrip("/") + "/"):
+                        matches.append((path == root, candidate["pane_active"] == "1", min(len(path), len(root)), -int(pid[1:]), pid))
+            if matches:
+                pane = max(matches)[-1]
+        metadata = self.model.panes.get(pane)
+        if not metadata or metadata["sidebar"]:
+            return
+        if event.get("app") and live_agent_app(metadata["pane_current_command"], metadata["pane_title"], self.agents.panes.get(pane, {})) != event["app"]:
+            self.refresh()
+            metadata = self.model.panes.get(pane)
+            if not metadata:
+                return
+        session = self.model.sessions.get(self.model.windows[metadata["window_id"]]["links"][0], {})
+        extra = {**metadata, "session_name": session.get("session_name", ""), "window_name": self.model.windows[metadata["window_id"]]["window_name"]}
+        delegated_count = len(self.agents.delegated)
+        if self.agents.update(pane, event, extra):
+            self.rows = project_rows(self.model, self.agents.panes, self.options, self.icons, self.badges, self.captures)
+            self.revision += 1
+            self.publish()
+            self.save()
+        elif len(self.agents.delegated) != delegated_count:
+            self.save()
+
+    def named_action(self, action: str, row: dict, name: str) -> None:
+        if not name.strip():
+            return
+        session = row.get("session_id", row.get("session", ""))
+        window = row.get("window", "")
+        if action == "add_window":
+            self.tmux.run("new-window", "-d", "-a", "-t", session + ":" + window, "-n", name)
+        elif action == "add_session":
+            self.tmux.run("new-session", "-d", "-s", name)
+            order = [value for value in option(self.options, "session_order").split(",") if value] or [item["session_name"] for item in self.model.sessions.values()]
+            after = self.model.sessions.get(session, {}).get("session_name", session)
+            index = order.index(after) + 1 if after in order else len(order)
+            order.insert(index, name)
+            self.set_option("session_order", ",".join(dict.fromkeys(order)))
+        elif action == "rename_window":
+            self.tmux.run("rename-window", "-t", window, name)
+        elif action == "rename_session":
+            old_name = self.model.sessions.get(session, {}).get("session_name", session)
+            self.tmux.run("rename-session", "-t", session, name)
+            order = option(self.options, "session_order")
+            if order:
+                self.set_option("session_order", ",".join(name if value == old_name else value for value in order.split(",")))
+        else:
+            raise ValueError("Unknown naming action")
+        self.refresh()
+
+    def set_option(self, suffix: str, value: str) -> None:
+        name = "@tmux_pane_tree_" + suffix
+        self.tmux.run("set-option", "-g", name, value)
+        self.options[name] = value
+
+    def remove_row(self, row: dict) -> None:
+        if row["kind"] == "session":
+            self.tmux.run("kill-session", "-t", row["session_id"])
+        elif row["kind"] == "window":
+            self.tmux.run("kill-window", "-t", row["window"])
+        else:
+            self.tmux.run("kill-pane", "-t", row["pane_id"])
+            window = row["window"]
+            remaining = [pane for pane in self.model.content(window) if pane["pane_id"] != row["pane_id"]]
+            if not remaining and self.model.sidebar(window):
+                self.tmux.run("kill-window", "-t", window, required=False)
+        self.refresh()
+
+    def configure(self) -> None:
+        options = parse_options(self.tmux.run("show-options", "-g"))
+        icons, badges = visuals(options)
+        self.options = options
+        self.icons, self.badges = icons, badges
+        width = integer(option(self.options, "width"), self.preferred_width, 1)
+        if width != self.preferred_width:
+            self.preferred_width = width
+            commands = []
+            for wid, window in self.model.windows.items():
+                sidebar = self.model.sidebar(wid)
+                if sidebar and window["window_zoomed_flag"] != "1":
+                    commands.append(["resize-pane", "-t", sidebar, "-x", str(min(width, max(1, self.model.available_sidebar_width(wid))))])
+                    self.programmatic.add(wid)
+            self.tmux.batch(commands)
+        self.install_bindings()
+        self.refresh()
+
+    def shell_command(self, command: str, **arguments: str) -> str:
+        parts = [sys.executable, str(ENTRYPOINT), command]
+        for key, value in arguments.items():
+            parts.extend(["--" + key.replace("_", "-"), value])
+        return "exec " + shlex.join(parts)
+
+    def install_bindings(self) -> None:
+        commands = []
+        installed = self.tmux.batch([["show-hooks", "-g"], ["show-hooks", "-gw"]]).splitlines()
+        supported = {line.split("[", 1)[0].split(" ", 1)[0] for line in installed}
+        old_hooks = {"client-active": 198, "client-attached": 199, "client-session-changed": 200, "client-focus-in": 202, "after-select-window": 203, "after-select-pane": 204, "session-window-changed": 205, "after-split-window": 206, "after-new-window": 207, "after-kill-pane": 208, "after-resize-pane": 209, "after-rename-window": 210, "after-rename-session": 211, "window-layout-changed": 212, "session-created": 213, "pane-exited": 214, "pane-died": 215}
+        commands.extend([["set-hook", "-gu", f"{hook}[{index}]"] for hook, index in old_hooks.items() if hook in supported])
+        for key in self.options:
+            if re.match(r"@tmux_sidebar_(?:pane|creating|layout|panes|focus)_w\d+$|@tmux_pane_tree_geometry_w\d+$", key):
+                commands.append(["set-option", "-gu", key])
+        events = {
+            "client-attached": "focus", "client-detached": "structure", "client-session-changed": "focus", "client-focus-in": "focus",
+            "after-select-window": "focus", "after-select-pane": "focus", "session-window-changed": "focus",
+            "window-layout-changed": "layout", "after-resize-pane": "resize", "session-created": "structure",
+            "session-closed": "structure", "session-renamed": "structure", "window-linked": "structure", "window-unlinked": "structure",
+            "window-renamed": "structure", "after-split-window": "structure",
+            "after-kill-pane": "structure", "pane-died": "structure", "pane-exited": "structure",
+            "pane-title-changed": "metadata", "client-resized": "layout", "window-resized": "layout", "window-pane-changed": "focus",
+            "after-set-option": "configuration", "after-new-window": "structure",
+        }
+        for line in installed:
+            if EVENT_CHANNEL in line:
+                commands.append(["set-hook", "-gu", line.split(" ", 1)[0]])
+        for index, (hook, kind) in enumerate(events.items(), 230):
+            if hook not in supported:
+                continue
+            hook_command = "wait-for -S " + EVENT_CHANNEL
+            if kind == "metadata":
+                condition = "#{&&:#{@tmux_sidebar_enabled},#{!=:" + TITLE_FORMAT + ",#{@tmux_pane_tree_observed_title}}}"
+                update = "set-option -pF @tmux_pane_tree_observed_title '" + TITLE_FORMAT + "' ; " + hook_command
+                hook_command = "if-shell -F " + shlex.quote(condition) + " " + shlex.quote(update)
+            elif kind == "resize":
+                hook_command = "set-option -gF @tmux_pane_tree_resized_pane '#{pane_id}' ; " + hook_command
+            elif kind == "focus":
+                hook_command = "set-option -gF @tmux_pane_tree_focus_pane '#{pane_id}' ; set-option -gF @tmux_pane_tree_focus_client '#{client_name}' ; " + hook_command
+            commands.append(["set-hook", "-g", f"{hook}[{index}]", hook_command])
+        for action, default in (("toggle", "t"), ("focus", "T")):
+            key = option(self.options, action + "_key", default) or default
+            previous = self.options.get("@tmux_sidebar_bound_" + action + "_key", default)
+            if previous != key:
+                commands.append(["unbind-key", previous])
+            command = self.shell_command(action, pane="#{pane_id}", window="#{window_id}", client="#{client_name}")
+            commands.append(["bind-key", key, "run-shell", "-b", command])
+            commands.append(["set-option", "-g", "@tmux_sidebar_bound_" + action + "_key", key])
+        for action, default in (("jump_back", "C-o"), ("jump_forward", "C-i")):
+            key = shortcuts(self.options)[action]
+            previous = self.options.get("@tmux_sidebar_bound_" + action + "_shortcut", default)
+            if previous != key:
+                commands.append(["unbind-key", "-n", previous])
+            if re.fullmatch("C-[A-Za-z]", key):
+                command = self.shell_command("view-action", action=action, pane="#{pane_id}", client="#{client_name}")
+                commands.append(["bind-key", "-n", key, "if-shell", "-F", "#{@tmux_sidebar_owned}", "run-shell -b " + shlex.quote(command), "send-keys " + key])
+                commands.append(["set-option", "-g", "@tmux_sidebar_bound_" + action + "_shortcut", key])
+        original = self.options.get("@tmux_pane_tree_original_mouse_binding", "")
+        if not original:
+            bindings = self.tmux.run("list-keys", "-T", "root", required=False)
+            binding = next((line for line in bindings.splitlines() if re.match(r"bind-key\s+(?:-T\s+root\s+)?MouseDown3Pane\s", line)), "")
+            match = re.match(r"bind-key\s+(?:-T\s+root\s+)?MouseDown3Pane\s+(.+)", binding)
+            original = match.group(1) if match else "select-pane -t= ; send-keys -M"
+        legacy_menu = re.match(r'if-shell -F "#\{m:Sidebar,#\{pane_title\}\}" \{ if-shell .*? \{ source-file .*? \} \} \{ (.*) \}$', original)
+        if legacy_menu:
+            original = legacy_menu.group(1)
+        if original != self.options.get("@tmux_pane_tree_original_mouse_binding"):
+            commands.append(["set-option", "-g", "@tmux_pane_tree_original_mouse_binding", original])
+        menu = self.shell_command("menu", pane="#{pane_id}", row="#{mouse_y}", client="#{client_name}")
+        commands.append(["bind-key", "-T", "root", "MouseDown3Pane", "if-shell", "-F", "#{@tmux_sidebar_owned}", "select-pane -t=", original])
+        original_up = self.options.get("@tmux_pane_tree_original_mouse_up_binding", "")
+        if not original_up:
+            bindings = self.tmux.run("list-keys", "-T", "root", required=False)
+            binding = next((line for line in bindings.splitlines() if re.match(r"bind-key\s+(?:-T\s+root\s+)?MouseUp3Pane\s", line)), "")
+            match = re.match(r"bind-key\s+(?:-T\s+root\s+)?MouseUp3Pane\s+(.+)", binding)
+            original_up = match.group(1) if match else "send-keys -M"
+            commands.append(["set-option", "-g", "@tmux_pane_tree_original_mouse_up_binding", original_up])
+        commands.append(["bind-key", "-T", "root", "MouseUp3Pane", "if-shell", "-F", "#{@tmux_sidebar_owned}", "run-shell -b " + shlex.quote(menu), original_up])
+        self.tmux.batch(commands)
+
+    def menu(self, pane: str, mouse_row: int, client: str = "", key: str = "") -> None:
+        client = self.client_for(pane, client)
+        if not client:
+            return
+        row_map = self.row_maps.get(pane, {})
+        keys = row_map.get("keys", [])
+        index = mouse_row - int(self.model.panes.get(pane, {}).get("pane_top", 0)) + row_map.get("scroll", 0)
+        key = key or (keys[index] if 0 <= index < len(keys) else "")
+        row = next((row for row in self.rows if row["key"] == key), None)
+        def callback(action: str, command: str = "view-action") -> str:
+            return "run-shell -b " + shlex.quote(self.shell_command(command, pane=pane, client=client, action=action, key=key))
+        args = ["display-menu", "-M", "-c", client, "-t", pane, "-x", "R", "-y", str(max(0, mouse_row)), "-T", " Binder "]
+        if row:
+            args.extend(["Select", "s", callback("select"), "Rename", "r", callback("rename")])
+            if row["kind"] == "session":
+                args.extend(["Detach Session", "d", callback("detach", "menu-action")])
+            else:
+                args.extend(["Split Horizontal", "h", callback("split_horizontal", "menu-action"), "Split Vertical", "v", callback("split_vertical", "menu-action")])
+                if row["kind"] == "pane" or row.get("pane_id", "").startswith("%"):
+                    args.extend(["Zoom / Unzoom", "z", callback("zoom", "menu-action"), "Break to Window", "b", callback("break_window", "menu-action"), "Mark / Unmark", "M", callback("mark", "menu-action")])
+            args.extend(["Close", "x", callback("confirm_close")])
+        args.extend(["New Window", "w", callback("add_window"), "New Session", "n", callback("add_session"), "Refresh", "R", callback("refresh"), "Close Sidebar", "q", callback("close")])
+        self.tmux.spawn(*args)
+
+    def menu_action(self, action: str, row: dict, client: str = "") -> None:
+        if action == "detach" and row["kind"] == "session":
+            self.tmux.run("detach-client", "-s", row["session_id"])
+        else:
+            window = row.get("window", "")
+            target = row.get("pane_id", "")
+            if not target.startswith("%"):
+                target = self.window_main.get(window, "")
+            if target not in self.model.panes or self.model.panes[target]["sidebar"]:
+                raise ValueError("Selected content pane no longer exists")
+            if action in {"split_horizontal", "split_vertical"}:
+                self.tmux.run("split-window", "-d", "-h" if action == "split_horizontal" else "-v", "-t", target)
+            elif action == "zoom":
+                self.tmux.run("resize-pane", "-Z", "-t", target)
+            elif action == "break_window":
+                self.tmux.run("break-pane", "-d", "-s", target)
+            elif action == "mark":
+                marked = self.tmux.run("display-message", "-pt", target, "#{pane_marked}") == "1"
+                self.tmux.run("select-pane", "-M" if marked else "-m", "-t", target)
+            else:
+                raise ValueError("Unknown menu action")
+        self.refresh()
+
+    def diagnostics(self) -> dict:
+        return {"pid": os.getpid(), "server_pid": self.identity.server_pid, "socket": self.identity.socket_path,
+                "state": str(self.identity.directory), "open": self.is_open, "revision": self.revision,
+                "windows": len(self.model.windows), "views": sum(pane["sidebar"] for pane in self.model.panes.values()),
+                "clients": len(self.model.clients), "tmux_calls": self.tmux.calls, "tmux_seconds": round(self.tmux.seconds, 6),
+                "events": self.events, "last_event": self.last_event, "errors": self.errors,
+                "agents": self.agents.panes, "window_main": self.window_main, "client_main": self.client_main}

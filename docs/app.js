@@ -97,12 +97,12 @@ document.querySelectorAll(".tab").forEach(function (button) {
   }
 
   var pane = {
-    start: '<span class="prompt">$</span> claude\n\n<span class="prompt">></span> tighten the retry loop in lib.sh',
-    read: '\n\n<span class="dim">⏺ Read scripts/core/lib.sh</span>',
-    edit: '\n<span class="dim">⏺ Edit scripts/core/lib.sh</span>',
-    ask: '\n\n<span class="ask">Allow edit to scripts/core/lib.sh?</span>\n<span class="dim">  y / n</span>',
+    start: '<span class="prompt">$</span> claude\n\n<span class="prompt">></span> tighten the retry loop in controller.py',
+    read: '\n\n<span class="dim">⏺ Read scripts/binder/controller.py</span>',
+    edit: '\n<span class="dim">⏺ Edit scripts/binder/controller.py</span>',
+    ask: '\n\n<span class="ask">Allow edit to scripts/binder/controller.py?</span>\n<span class="dim">  y / n</span>',
     yes: '\n<span class="prompt">></span> y',
-    test: '\n\n<span class="dim">⏺ Bash tests/run.sh tests/core/lib_test.sh</span>\n<span class="dim">  12 passed</span>',
+    test: '\n\n<span class="dim">⏺ Bash tests/run.sh tests/integration/coordinator_test.py</span>\n<span class="dim">  All checks passed</span>',
     done: '\n\n<span class="ok">✔</span> Retry backs off 50 → 400 ms. One file changed.',
   };
 

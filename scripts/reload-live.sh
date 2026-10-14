@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-PLUGIN_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-
-tmux source-file "$PLUGIN_ROOT/tmux-pane-tree.conf"
-bash "$PLUGIN_ROOT/scripts/features/sidebar/reload-sidebar-panes.sh"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+exec python3 "$SCRIPT_DIR/binder.py" reload "$@"

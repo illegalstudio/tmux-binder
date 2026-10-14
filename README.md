@@ -27,7 +27,9 @@ badges for `claude`, `codex`, `cursor`, `opencode`, `pi`, and `kiro`.
 
 - **Tree view** of sessions, windows, and panes. `Enter` jumps to a pane.
 - **Agent badges** update live from agent hooks.
-- **Follows you** across windows once opened.
+- **Global visibility**: open or close once for every window and session.
+- **One coordinator per server**: native events and shared state, with sleeping UI processes at idle.
+- **Unicode search and prompts**, collapsible branches, and native context menus.
 - **Manage sessions** from the sidebar: add, rename, close.
 
 | Badge | Status           | Meaning                          |
@@ -42,7 +44,7 @@ badges for `claude`, `codex`, `cursor`, `opencode`, `pi`, and `kiro`.
 
 ## Install
 
-Requires tmux 3.0+, Python 3, bash 4.0+.
+Requires tmux 3.4+, Python 3.10+ with curses, and Bash. No pip packages are required.
 
 **TPM**
 
@@ -95,8 +97,21 @@ Inside the sidebar:
 | `Ctrl+l`             | Return focus to the main pane     |
 | `q`                  | Close the sidebar                 |
 
+Names are entered inside the sidebar. Ctrl+u clears the prompt and Escape
+cancels it. Search and names accept Unicode. Use h/l or the left/right arrows
+to collapse and expand branches. Use / to search and n/N to move between matches.
+Use m or right click to open the context menu. Collapsed branches survive reloads.
+Context menus also provide splitting, zoom, marking and moving a pane to a new
+window. Session menus can detach their clients.
+
 New windows and sessions insert next to the selected row. Closing the last
 pane removes its window, and the last window removes its session.
+
+The sidebar has one shared open/closed state. `prefix t` opens it in all
+windows and sessions, including detached ones, or closes it everywhere.
+New windows and sessions inherit that state. q and removing a sidebar pane also
+close it globally. A failed sidebar process is restarted in place, preserving
+content panes. The coordinator also reconnects after an unexpected exit.
 
 The jump list starts from the pane you came from. The final `Ctrl+o` returns
 you there. It resets when the sidebar loses focus.
@@ -111,19 +126,19 @@ Set options with `set -g` in your tmux config.
 | `@tmux_pane_tree_focus_on_open`           |   `1`   | Focus the sidebar when toggled open           |
 | `@tmux_pane_tree_toggle_key`              |   `t`   | Prefix key to toggle                          |
 | `@tmux_pane_tree_focus_key`               |   `T`   | Prefix key to focus                           |
-| `@tmux_pane_tree_session_order`           |    —    | Comma-separated session order, rest follow    |
-| `@tmux_pane_tree_filter`                  |    —    | Comma-separated pane filter (see below)       |
+| `@tmux_pane_tree_session_order`           |    -    | Comma-separated session order, rest follow    |
+| `@tmux_pane_tree_filter`                  |    -    | Comma-separated pane filter (see below)       |
 | `@tmux_pane_tree_hide_panes`              |  `off`  | Show only sessions and windows                |
 | `@tmux_pane_tree_compact_single_panes`    |  `off`  | Fold single-pane windows into one row         |
 | `@tmux_pane_tree_scrolloff`               |   `8`   | Rows kept visible around the cursor, `0` off  |
 | `@tmux_pane_tree_icon_theme`              | `auto`  | `auto`, `ascii`, `unicode`, or `nerdfont`     |
-| `@tmux_pane_tree_icon_<app>`              |    —    | Override one app icon                         |
-| `@tmux_pane_tree_badge_<status>`          |    —    | Override one status badge                     |
-| `@tmux_pane_tree_color_session`           |    —    | Session name color, hex                       |
-| `@tmux_pane_tree_color_window`            |    —    | Window name color, hex                        |
-| `@tmux_pane_tree_color_pane`              |    —    | Pane name color, hex                          |
+| `@tmux_pane_tree_icon_<app>`              |    -    | Override one app icon                         |
+| `@tmux_pane_tree_badge_<status>`          |    -    | Override one status badge                     |
+| `@tmux_pane_tree_color_session`           |    -    | Session name color, hex                       |
+| `@tmux_pane_tree_color_window`            |    -    | Window name color, hex                        |
+| `@tmux_pane_tree_color_pane`              |    -    | Pane name color, hex                          |
 | `@tmux_pane_tree_install_agent_hooks`     |   `0`   | Install agent hooks when the plugin loads     |
-| `@tmux_pane_tree_<action>_shortcut`       |    —    | Override a sidebar shortcut (see below)       |
+| `@tmux_pane_tree_<action>_shortcut`       |    -    | Override a sidebar shortcut (see below)       |
 
 | Environment variable        | Description                                                  |
 | --------------------------- | ------------------------------------------------------------ |
@@ -173,17 +188,22 @@ set -g @tmux_pane_tree_badge_running "*"
 
 **Colors.** Unset colors derive from your tmux theme.
 
+**Sidebar width.** Drag its border or use tmux's pane resize commands. The
+chosen width is saved and shared across existing and new windows, including
+after closing and reopening the sidebar. It is also preserved when clients
+with different terminal sizes share a session.
+When a window is too narrow, the sidebar shrinks to leave room for every content
+pane. The saved preferred width remains available for larger windows.
+
 ## Agent hooks
 
-```
-  agent hook ──▶ scripts/features/hooks/hook-<agent>.sh
-                        │
-                        ▼
-             update-pane-state.sh --pane $TMUX_PANE --app claude --status running
-                        │
-                        ▼
-             $STATE_DIR/pane-%N.json ──▶ sidebar badge
-```
+Agent wrappers parse their payload once and send a normalized event to the
+coordinator. It orders updates, tracks subagents, saves one atomic state snapshot,
+and publishes the resulting badges to every view.
+
+Runtime data is isolated under `$STATE_DIR/servers/<socket-hash>-<server-pid>/`.
+Preferences are stored separately by socket identity. Pane IDs from independent
+tmux servers cannot overwrite each other.
 
 `install-agent-hooks.sh` writes the wiring for every agent and keeps three
 timestamped backups per file:
@@ -220,36 +240,66 @@ For that to work:
 
 Custom integrations call `update-pane-state.sh` directly with `--pane "$TMUX_PANE"`.
 
+## Diagnostics and reload
+
+Run from a tmux pane:
+
+~~~bash
+python3 /path/to/tmux-binder/scripts/binder.py doctor
+~~~
+
+This reports the coordinator PID, connected views, client count, tmux calls,
+state directory and view recovery errors. `engine.log` in that state directory
+contains bounded diagnostic logs. The coordinator has no network listener.
+
+Configuration values update through native tmux events. Reload the plugin after
+changing its tmux keybindings. To reload Python code from a development checkout:
+
+~~~bash
+bash scripts/reload-live.sh
+~~~
+
+This restarts the coordinator and sidebar processes, preserving content panes,
+pane IDs and layouts. It does not install agent hooks. Hook installation is an
+explicit action unless `@tmux_pane_tree_install_agent_hooks` is enabled.
+
+To remove the plugin's agent hooks while preserving other integrations:
+
+~~~bash
+python3 scripts/binder.py install-hooks --remove
+~~~
+
 ## Development
 
-```
+~~~
 scripts/
-  core/        shared bash and hook parsing
-  ui/          curses UI: sidebar-ui.py + sidebar_ui_lib/
-  features/    sidebar, state, hooks, sessions, context-menu
-tests/         fake-tmux test suites, run with bash tests/run.sh
-examples/      copy-ready agent hook configs
-```
+  binder.py    command entrypoint
+  binder/      coordinator, model, state, tmux adapter, agents and installer
+  ui/          curses views and pure Unicode/input helpers
+  features/    thin Bash compatibility entrypoints
+tests/
+  unit/        Python domain, protocol, UI and installer tests
+  fixtures/    preserved agent event contracts
+  integration/ isolated real tmux servers and PTY interaction
+~~~
 
-```bash
-bash tests/run.sh                 # all tests, no live tmux needed
-```
+~~~bash
+bash tests/run.sh
+~~~
+
+The suite requires tmux and runs isolated servers. It covers multiple clients and
+servers, mouse resizing, zoom, shared visibility, rendered navigation, agent
+ordering, recovery, Unicode prompts and native menus. It never uses the user's
+tmux server. One file can be passed to the same runner.
 
 For development, link the checkout into tmux's plugin directory and load the
 configuration shown above. Move an existing plugin directory aside first.
 
-```bash
+~~~bash
 mkdir -p ~/.config/tmux/plugins
 ln -s "$PWD" ~/.config/tmux/plugins/tmux-binder
 bash scripts/reload-live.sh
-```
-
-Shell scripts are read from the checkout when invoked. After editing Python UI
-code, run `bash scripts/reload-live.sh` again: it reloads the plugin configuration
-and restarts only sidebar processes, preserving content panes. It does not edit
-your tmux configuration or install agent hooks. Leave the optional
-`@tmux_pane_tree_install_agent_hooks` setting disabled to keep automatic hook
-installation off when loading the plugin.
+~~~
 
 ## License
 
