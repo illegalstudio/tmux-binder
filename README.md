@@ -41,6 +41,8 @@
 
 [Installation](#installation) · [Navigation](#navigation) · [Agent activity](#agent-activity) · [Configuration](#configuration) · [Development](#development)
 
+![tmux-binder sidebar showing sessions, windows and agent activity](assets/preview.png)
+
 ## Your workspace at a glance
 
 ```text
