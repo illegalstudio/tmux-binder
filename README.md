@@ -382,6 +382,37 @@ The suite covers multiple clients and servers, mouse resizing, zoom, global visi
 
 See [CLAUDE.md](CLAUDE.md) for architecture and development conventions, and [CHANGELOG.md](CHANGELOG.md) for changes.
 
+### Releases
+
+From a clean `main` checkout already pushed to `origin/main`, run:
+
+```bash
+make release
+```
+
+The command checks local and remote tags, proposes the next patch version and
+lets you enter a different version before confirming. The first proposed version
+is `v1.0.0`. It creates an annotated tag at the displayed commit and pushes only
+that tag to `origin`. GitHub Actions runs the complete Python test matrix on the
+tag, then publishes a GitHub Release with generated notes and source archives.
+
+To check the proposed release without creating or pushing a tag:
+
+```bash
+make release-dry-run
+make release-dry-run VERSION=1.2.0
+```
+
+`make release VERSION=1.2.0` skips the version prompt and still asks for final
+confirmation. Git, Python 3.10+ and Make are required locally; publishing uses
+GitHub Actions' built-in token. Existing Git tag-signing settings are honored.
+After a failed push, the local tag is retained: inspect the remote tag before
+retrying its push. A failed test leaves the tag in place and publishes no release;
+fix the regression and release a new version, or rerun a transient CI failure.
+
+TPM continues to install and update the repository's default `main` branch.
+Creating a release does not change the plugin's update channel.
+
 ## License and credits
 
 [MIT](LICENSE). tmux-binder is maintained by [Illegal Studio](https://github.com/illegalstudio).

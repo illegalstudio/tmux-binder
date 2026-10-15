@@ -4,6 +4,8 @@ All notable project versions are documented here.
 
 ## Unreleased
 
+- Add interactive `make release`, a read-only release preview and a tag-triggered
+  GitHub Release workflow gated by the complete Python test matrix.
 - Retain native event bursts while the coordinator rearms its listener, avoiding
   missed configuration and geometry updates without periodic tmux queries.
 

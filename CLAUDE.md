@@ -154,3 +154,16 @@ Never test new UI or hooks in the user's sessions. Use isolated servers first.
 For the symlinked development checkout, run bash scripts/reload-live.sh after
 validation. It loads code and restarts views while preserving content panes.
 Agent hook installation is separate and opt-in.
+
+## Releases
+
+`make release` delegates through scripts/release.sh to the standalone stdlib
+Python release utility in scripts/release.py. Keep release tooling separate
+from the tmux runtime. Release from a clean main checkout matching origin/main;
+consider local and remote canonical semver tags, recheck after confirmation,
+create an annotated tag at the displayed commit and push only that tag.
+Never delete or retry a tag automatically after an ambiguous push failure.
+Use `make release-dry-run` for inspection. Test release mutations only in
+temporary Git repositories with bare local remotes, never against origin.
+The tag-triggered GitHub workflow reuses the complete test matrix before creating
+a source-only GitHub Release. TPM keeps following main.
