@@ -3,6 +3,9 @@
 A tmux plugin with one Python coordinator per server and one lightweight curses
 view per sidebar pane. Bash files are compatibility launchers.
 
+Requires tmux 3.5+ for allow-set-title and display-menu -M. CI builds the pinned
+minimum and current tmux versions and tests each with Python 3.10 and 3.14.
+
 ## Architecture
 
 - sidebar.tmux is the executable TPM entrypoint. tmux-pane-tree.tmux is a

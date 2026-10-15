@@ -21,6 +21,7 @@ class SidebarRendering(unittest.TestCase):
                 terminal.keys("\x02t")
                 terminal.wait(lambda: bool(server.sidebar(server.window)))
                 sidebar = server.sidebar(server.window)
+                terminal.wait(lambda: "editor" in server.t("capture-pane", "-pt", sidebar))
                 server.t("resize-window", "-t", server.window, "-x", "32", ";", "resize-window", "-t", server.window, "-x", "120", ";", "resize-pane", "-t", sidebar, "-x", "41")
                 terminal.wait(lambda: server.t("show-options", "-gqv", "@tmux_pane_tree_width"), "41")
                 self.assertEqual(server.t("display-message", "-pt", sidebar, "#{pane_width}"), "41")

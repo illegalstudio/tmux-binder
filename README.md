@@ -18,7 +18,7 @@
 
 <p align="center">
   <a href="https://github.com/illegalstudio/tmux-binder/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/illegalstudio/tmux-binder/test.yml?branch=main&amp;style=flat-square&amp;logo=github&amp;logoColor=white&amp;label=tests&amp;color=34D399" alt="Tests"></a>
-  <a href="#installation"><img src="https://img.shields.io/badge/tmux-3.4%2B-34D399?style=flat-square&amp;logo=tmux&amp;logoColor=white&amp;color=34D399" alt="tmux 3.4 or newer"></a>
+  <a href="#installation"><img src="https://img.shields.io/badge/tmux-3.5%2B-34D399?style=flat-square&amp;logo=tmux&amp;logoColor=white&amp;color=34D399" alt="tmux 3.5 or newer"></a>
   <a href="#installation"><img src="https://img.shields.io/badge/Python-3.10%2B-34D399?style=flat-square&amp;logo=python&amp;logoColor=white&amp;color=34D399" alt="Python 3.10 or newer"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/illegalstudio/tmux-binder?style=flat-square&amp;color=34D399" alt="MIT license"></a>
 </p>
@@ -62,7 +62,7 @@
 
 ## Installation
 
-Requires **tmux 3.4+**, **Python 3.10+ with curses**, and **Bash**. The runtime uses the Python standard library, with no pip packages to install.
+Requires **tmux 3.5+**, **Python 3.10+ with curses**, and **Bash**. The runtime uses the Python standard library, with no pip packages to install. Pane title control and native mouse menus use features introduced in tmux 3.5.
 
 ### With TPM
 

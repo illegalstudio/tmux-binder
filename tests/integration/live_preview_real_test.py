@@ -56,7 +56,8 @@ class Terminal:
                 continue
             if actual == expected:
                 return
-        raise AssertionError(f"Expected {expected!r}, received {actual!r}; terminal: {bytes(self.output[-1000:])!r}")
+        log = self.server.identity.directory / "engine.log"
+        raise AssertionError(f"Expected {expected!r}, received {actual!r}; terminal: {bytes(self.output[-1000:])!r}; coordinator: {log.read_text() if log.exists() else ''}")
 
     def location(self) -> list[str]:
         lines = self.server.t("list-clients", "-F", "#{client_pid}|#{session_name}|#{window_id}|#{pane_id}").splitlines()

@@ -4,6 +4,8 @@ All notable project versions are documented here.
 
 ## Unreleased
 
+- Correct the tmux minimum to 3.5 for pane title control and native mouse menus.
+  Test pinned tmux 3.5 and 3.7c with both supported Python versions in CI.
 - Add interactive `make release`, a read-only release preview and a tag-triggered
   GitHub Release workflow gated by the complete Python test matrix.
 - Retain native event bursts while the coordinator rearms its listener, avoiding

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from binder.config import SHORTCUTS, enabled, integer, option, parse_options, shortcuts, visuals
+from binder.controller import Application
 from binder.runtime import MAX_MESSAGE, Identity, atomic_json, decode, encode, read_json
 from binder.tmux import SCHEMAS, parse_records
 
@@ -17,6 +18,16 @@ def record(kind: str, values: list[str]) -> bytes:
 
 
 class Protocol(unittest.TestCase):
+    def test_unsupported_tmux_is_rejected_before_any_configuration_changes(self):
+        identity = Identity("/unused/socket", 1, Path("/unused/state"), Path("/unused/preferences"))
+        for version in ("2.9", "3.3a", "3.4"):
+            with self.subTest(version=version), patch("binder.controller.Tmux") as tmux:
+                tmux.return_value.run.return_value = version
+                with self.assertRaisesRegex(RuntimeError, r"requires tmux 3\.5\+"):
+                    Application(identity, lambda kind, message: None)
+                tmux.return_value.run.assert_called_once_with("display-message", "-p", "#{version}")
+                tmux.return_value.batch.assert_not_called()
+
     def test_unicode_pipe_newline_and_quotes_in_tmux_records(self):
         data = {key: "" for key in SCHEMAS["P"]}
         data.update(pane_id="%1", window_id="@2", pane_title='A|B "quote"\n界😀\\end\tline')

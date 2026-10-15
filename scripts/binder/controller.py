@@ -32,8 +32,8 @@ class Application:
         self.tmux = Tmux(identity.socket_path)
         version = self.tmux.run("display-message", "-p", "#{version}")
         release = re.match(r"(\d+)\.(\d+)", version)
-        if release and tuple(map(int, release.groups())) < (3, 4):
-            raise RuntimeError("tmux-binder requires tmux 3.4+ for native mouse menus")
+        if release and tuple(map(int, release.groups())) < (3, 5):
+            raise RuntimeError("tmux-binder requires tmux 3.5+ for pane title control and native mouse menus")
         self.emit = emit
         saved = read_json(identity.directory / "state.json")
         preferences = read_json(identity.preferences)
