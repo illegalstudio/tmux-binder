@@ -4,6 +4,14 @@ All notable project versions are documented here.
 
 ## Unreleased
 
+- Retain native event bursts while the coordinator rearms its listener, avoiding
+  missed configuration and geometry updates without periodic tmux queries.
+
+- Restore a working shell when an external project/session selector enters an
+  existing sidebar-only session, using its original directory and preserving
+  natural content-exit navigation.
+- Retain content exits across reconciliation snapshots so a pane terminating
+  during sidebar creation cannot leave an empty window behind.
 - Serialize live navigation against one cursor per client before coalescing
   previews, retaining repeated j/k input across sidebar handoffs. Cancel obsolete
   switches immediately, preserve branch input during a pending handoff and wait

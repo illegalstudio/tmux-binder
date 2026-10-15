@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from binder.runtime import Identity, request
+from binder.controller import EVENT_CHANNEL, EVENT_PENDING
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -125,6 +126,28 @@ class Coordinator(unittest.TestCase):
         self.assertGreaterEqual(len(ours), 18)
         self.assertFalse(any("run-shell" in line for line in ours))
         self.assertTrue(any("binder.py" in line and " t " in line for line in server.t("list-keys", "-T", "prefix").splitlines()))
+
+    def test_native_hook_bursts_retain_one_wakeup_without_a_listener(self):
+        server = self.server()
+        doctor = server.api("doctor")
+        waiter = doctor["waiter_pid"]
+        channel = EVENT_CHANNEL + "-" + str(doctor["pid"])
+        server.api("shutdown")
+        server.wait(lambda: server.identity.endpoint.exists(), False)
+        if waiter:
+            server.wait(lambda: Path(f"/proc/{waiter}").exists(), False)
+        # Drain an earlier wakeup, or terminate the isolated waiter if none is pending.
+        try:
+            subprocess.run(["tmux", "-S", server.socket, "wait-for", channel], env=server.env, capture_output=True, check=True, timeout=.2)
+        except subprocess.TimeoutExpired:
+            pass
+        for count in (1, 2, 3, 4):
+            with self.subTest(notifications=count):
+                server.t("set-environment", "-gh", EVENT_PENDING, "")
+                for _ in range(count):
+                    server.t("set-hook", "-R", "-g", "after-set-option")
+                subprocess.run(["tmux", "-S", server.socket, "wait-for", channel], env=server.env, capture_output=True, check=True, timeout=1)
+                self.assertNotIn(EVENT_PENDING + "=", server.t("show-environment", "-g"))
 
     def test_global_state_reaches_future_sessions(self):
         server = self.server()

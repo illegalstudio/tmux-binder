@@ -18,6 +18,7 @@ from .tmux import Tmux, TmuxError
 RECONCILE_SECONDS = 30.0
 AGENT_SAMPLE_SECONDS = 1.0
 EVENT_CHANNEL = "tmux-binder-events"
+EVENT_PENDING = "TMUX_BINDER_EVENTS_PENDING"
 RENAME_SOURCE = "@tmux_pane_tree_rename_format"
 SIDEBAR_RENAME_FORMAT = "#{?@tmux_sidebar_owned,#{window_name},#{E:" + RENAME_SOURCE + "}}"
 # Explicit members avoid locale-dependent Unicode range collation in tmux regexes.
@@ -27,6 +28,7 @@ TITLE_FORMAT = "#{s/^[" + "".join(chr(code) for code in range(0x2800, 0x2900)) +
 class Application:
     def __init__(self, identity: Identity, emit: Callable[[str, dict], None]) -> None:
         self.identity = identity
+        self.event_channel = EVENT_CHANNEL + "-" + str(os.getpid())
         self.tmux = Tmux(identity.socket_path)
         version = self.tmux.run("display-message", "-p", "#{version}")
         release = re.match(r"(\d+)\.(\d+)", version)
@@ -49,6 +51,7 @@ class Application:
             if legacy.exists():
                 self.preferred_width = integer(legacy.read_text().strip(), 25, 1)
         self.model = Model.from_records(self.tmux.snapshot())
+        self.exited_windows: set[str] = set()
         self.is_open = self.model.globals.get("@tmux_sidebar_enabled") == "1"
         self.rows: list[dict] = []
         self.captures: dict[str, str] = {}
@@ -161,6 +164,16 @@ class Application:
         self.options = options
         self.icons, self.badges = icons, badges
 
+    def _snapshot(self) -> None:
+        previous = self.model
+        self.model = Model.from_records(self.tmux.snapshot())
+        self.exited_windows.update(
+            wid for wid in self.model.windows
+            if self.model.sidebar(wid) and not self.model.content(wid)
+            and any(pane["pane_id"] not in self.model.panes for pane in previous.content(wid))
+        )
+        self.exited_windows.intersection_update(self.model.windows)
+
     def refresh(self, reconcile: bool = True) -> None:
         previous = self.model
         self.read_options()
@@ -174,7 +187,7 @@ class Application:
                     commands.append(["resize-pane", "-t", pid, "-x", str(min(configured_width, max(1, self.model.available_sidebar_width(wid))))])
                     self.programmatic.add(wid)
             self.tmux.batch(commands)
-        self.model = Model.from_records(self.tmux.snapshot())
+        self._snapshot()
         self.repair_content_exit(previous)
         resized_pane, _, resized_width = self.model.globals.get("@tmux_pane_tree_resized_pane", "").partition(":")
         if resized_pane:
@@ -222,7 +235,9 @@ class Application:
             changed = self.sync_geometry(automatic_resize, resized_pane, resized_width) or changed
             changed = self.recover_views() or changed
         if changed:
-            self.model = Model.from_records(self.tmux.snapshot())
+            before_reconcile = self.model
+            self._snapshot()
+            self.repair_content_exit(before_reconcile)
             self._update_main()
             self._record_geometry()
         rows = project_rows(self.model, self.agents.panes, self.options, self.icons, self.badges, self.captures)
@@ -248,7 +263,31 @@ class Application:
 
     def repair_content_exit(self, previous: Model) -> None:
         empty = {wid for wid in self.model.windows if self.model.sidebar(wid) and not self.model.content(wid)}
-        orphaned = {wid for wid in empty if previous.content(wid)}
+        orphaned = empty & self.exited_windows
+        recovered: set[str] = set()
+        for client in self.model.clients.values():
+            window = client["window_id"]
+            old = previous.clients.get(client["client_name"], {})
+            entered = old.get("window_id") != window or old.get("session_id") != client["session_id"]
+            if window not in empty or window in orphaned or window in recovered or not entered or not previous.sidebar(window):
+                continue
+            try:
+                path = self.tmux.run("display-message", "-p", "-t", client["session_id"], "#{session_path}")
+                width = int(self.model.windows[window]["window_width"])
+                content_width = max(1, width - min(self.preferred_width, max(1, width - 2)) - 1)
+                self.tmux.run("split-window", "-h", "-t", self.model.sidebar(window), "-c", path, "-l", str(content_width))
+            except TmuxError as error:
+                message = "Cannot restore a working pane: " + str(error)
+                self.errors[window] = message
+                logging.warning("%s in %s", message, window)
+                self.emit("notice", {"type": "notice", "error": message})
+                continue
+            self.errors.pop(window, None)
+            self.window_state.setdefault(window, {}).update(panes=[], layout="")
+            recovered.add(window)
+        if recovered:
+            self._snapshot()
+            empty.difference_update(wid for wid in recovered if self.model.content(wid))
         live = {wid: [pane for pane in self.model.content(wid) if pane["pane_dead"] != "1"] for wid in self.model.windows if wid not in empty}
         commands = []
         for name, client in self.model.clients.items():
@@ -278,7 +317,11 @@ class Application:
         commands.extend(["kill-window", "-t", wid] for wid in sorted(orphaned))
         if commands:
             self.tmux.batch(commands)
-            self.model = Model.from_records(self.tmux.snapshot()) if len(orphaned) < len(self.model.windows) else Model()
+            if len(orphaned) < len(self.model.windows):
+                self._snapshot()
+            else:
+                self.model = Model()
+                self.exited_windows.clear()
 
     def ensure_all(self, focus_window: str = "") -> bool:
         created = self.protect_window_names()
@@ -529,7 +572,7 @@ class Application:
         self._set_open(False)
         commands = [["kill-pane", "-t", pane_id] for pane_id, pane in self.model.panes.items() if pane["sidebar"]]
         self.tmux.batch(commands, required=False)
-        self.model = Model.from_records(self.tmux.snapshot())
+        self._snapshot()
         layouts = []
         for window_id, state in self.window_state.items():
             panes = sorted(pane["pane_id"] for pane in self.model.content(window_id))
@@ -793,7 +836,9 @@ class Application:
         for index, (hook, kind) in enumerate(events.items(), 230):
             if hook not in supported:
                 continue
-            hook_command = "wait-for -S " + EVENT_CHANNEL
+            # Repeated wait-for signals can cancel each other before a listener returns.
+            signal_command = "set-environment -gh " + EVENT_PENDING + " " + self.event_channel + " ; wait-for -S " + self.event_channel
+            hook_command = "if-shell -F " + shlex.quote("#{!=:#{" + EVENT_PENDING + "}," + self.event_channel + "}") + " " + shlex.quote(signal_command)
             if kind == "metadata":
                 condition = "#{&&:#{@tmux_sidebar_enabled},#{!=:" + TITLE_FORMAT + ",#{@tmux_pane_tree_observed_title}}}"
                 update = "set-option -pF @tmux_pane_tree_observed_title '" + TITLE_FORMAT + "' ; " + hook_command

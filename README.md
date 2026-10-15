@@ -125,6 +125,9 @@ you to live content, preferring another window in the same session and then
 another session. Existing windows containing only the sidebar are skipped.
 Exiting the last working pane on the server detaches the client.
 
+If an external project/session selector opens an older session containing only
+Binder, a working shell is restored in that session's original directory.
+
 To browse without switching content until Enter:
 
 ```tmux

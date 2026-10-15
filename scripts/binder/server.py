@@ -13,7 +13,7 @@ from logging.handlers import RotatingFileHandler
 
 from .agents import normalize
 from .config import enabled, option
-from .controller import Application, EVENT_CHANNEL
+from .controller import Application, EVENT_PENDING
 from .runtime import MAX_MESSAGE, Identity, decode, encode
 from ui.sidebar_ui_lib.view import navigate
 
@@ -55,7 +55,11 @@ class Server:
     def watch_tmux(self) -> None:
         if self.waiter is not None:
             return
-        self.waiter = subprocess.Popen(["tmux", "-S", self.identity.socket_path, "wait-for", EVENT_CHANNEL], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        assert self.application is not None
+        channel = self.application.event_channel
+        # Acknowledge in the same native queue, only after consuming its signal.
+        condition = "#{==:#{" + EVENT_PENDING + "}," + channel + "}"
+        self.waiter = subprocess.Popen(["tmux", "-S", self.identity.socket_path, "wait-for", channel, ";", "if-shell", "-F", condition, "set-environment -gh " + EVENT_PENDING + " ''"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.selector.register(self.waiter.stdout, selectors.EVENT_READ, "tmux")
 
     def emit(self, kind: str, message: dict) -> None:
@@ -333,7 +337,6 @@ class Server:
             signal.signal(signal.SIGINT, stop)
             try:
                 self.application = Application(self.identity, self.emit)
-                self.application.tmux.run("wait-for", "-S", EVENT_CHANNEL)
                 self.watch_tmux()
                 while not self.stopping:
                     now = time.monotonic()

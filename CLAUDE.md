@@ -23,6 +23,11 @@ view per sidebar pane. Bash files are compatibility launchers.
 - Native tmux hooks signal a wait-for channel. The listener is an unattached
   command client, not a mutex or an attached control-mode client. Rearm it after
   any code path that drains pending notifications, including request dispatch.
+  Coalesce native signals with a hidden server environment latch: repeated
+  wait-for signals can cancel a pending wakeup when no listener is present.
+  The native listener clears its latch only after consuming the signal, before
+  Python reads state. Give each coordinator process its own channel so stale
+  notifications from an earlier process cannot cancel a fresh wakeup.
 - Title hooks deduplicate normalized titles in a pane option before signaling.
   Braille spinner frames are equivalent; entering or leaving that state is not.
   Use explicit regex members because Unicode ranges depend on server collation.
@@ -64,6 +69,12 @@ view per sidebar pane. Bash files are compatibility launchers.
   affected clients to live content before destroying a session. Skip existing
   sidebar-only destinations and detach when no live content remains. Never
   remove historical sidebar-only windows as collateral cleanup.
+  Retain pending content exits across every topology snapshot, including reads
+  after sidebar creation and geometry reconciliation, until cleanup completes.
+  An explicit client entry into a historical sidebar-only window restores one
+  working shell using its session_path. Do not respawn a newly exited working
+  pane or recover other detached sessions; project selectors must retain their
+  chosen session and directory.
 - Guard automatic window naming before focusing a sidebar. Keep the original
   format and its local/inherited scope in coordinator state, restore it on close,
   and honor global format changes for inherited windows. The namespaced window
