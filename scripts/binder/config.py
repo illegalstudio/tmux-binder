@@ -27,12 +27,12 @@ def integer(value: str, default: int, minimum: int = 0) -> int:
     return number if number >= minimum else default
 
 
-def parse_options(raw: str) -> dict[str, str]:
+def parse_options(raw: str, include: tuple[str, ...] = ()) -> dict[str, str]:
     options = {}
     for line in raw.splitlines():
-        if not line.startswith(("@tmux_pane_tree_", "@tmux_sidebar_")):
-            continue
         name, _, value = line.partition(" ")
+        if not name.startswith(("@tmux_pane_tree_", "@tmux_sidebar_")) and name not in include:
+            continue
         parts = shlex.split(value)
         options[name] = parts[0] if parts else ""
     return options

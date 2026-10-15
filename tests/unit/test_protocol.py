@@ -24,12 +24,12 @@ class Protocol(unittest.TestCase):
         self.assertEqual(parsed["P"], [data])
 
     def test_multiple_record_types_and_linked_windows(self):
-        raw = record("S", ["$0", "one", "0"]) + record("S", ["$1", "two", "1"])
+        raw = record("S", ["$0", "one", "0", "@0"]) + record("S", ["$1", "two", "1", "@2"])
         parsed = parse_records(raw)
         self.assertEqual(len(parsed["S"]), 2)
 
     def test_malformed_records_are_rejected(self):
-        for raw in (b"X", b"Pno:", b"P100:short", record("S", ["$0", "one", "0"])[:-1]):
+        for raw in (b"X", b"Pno:", b"P100:short", record("S", ["$0", "one", "0", "@0"])[:-1]):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 parse_records(raw)
 

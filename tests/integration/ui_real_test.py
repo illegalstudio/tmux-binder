@@ -20,6 +20,7 @@ class InteractiveUI(unittest.TestCase):
     def test_keyboard_unicode_prompts_navigation_and_native_menu(self):
         with tempfile.TemporaryDirectory(prefix="binder-ui-") as directory:
             server = Harness(Path(directory) / "a")
+            server.t("set-option", "-g", "@tmux_pane_tree_collapse_panes", "off")
             server.t("set-option", "-sg", "escape-time", "10")
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
@@ -78,7 +79,7 @@ class InteractiveUI(unittest.TestCase):
                 keys("\x15rinominata\r")
                 wait(lambda: server.t("display-message", "-p", "-t", target_sidebar, "#{window_name}"), "rinominata")
                 keys("h")
-                wait(lambda: "…" in frame(target_sidebar))
+                wait(lambda: "▸" in frame(target_sidebar))
                 captured.clear()
                 keys("m")
                 wait(lambda: b"New Session" in captured)

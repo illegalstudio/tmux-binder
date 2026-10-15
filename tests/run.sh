@@ -14,8 +14,9 @@ if [ "$#" -gt 0 ]; then
   done
 else
   python3 -m unittest discover -s tests/unit -v
-  python3 tests/integration/coordinator_test.py -v
-  python3 tests/integration/ui_real_test.py -v
+  for path in tests/integration/*_test.py; do
+    python3 "$path" -v
+  done
   for path in tests/integration/*_test.sh; do
     printf 'RUN %s\n' "$path"
     bash "$path"

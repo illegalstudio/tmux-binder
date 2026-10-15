@@ -46,7 +46,27 @@ view per sidebar pane. Bash files are compatibility launchers.
   has one shared terminal, so its clients share the curses cursor.
 - User close requests and removing a sidebar close all views. A process failure
   is recoverable and must preserve content panes.
+- Guard automatic window naming before focusing a sidebar. Keep the original
+  format and its local/inherited scope in coordinator state, restore it on close,
+  and honor global format changes for inherited windows. The namespaced window
+  format source is only for native tmux evaluation, without polling or subprocesses.
 - Render acknowledgements prepare destination selection before navigation.
+- Live preview transfers search, collapse, scroll and history to the destination
+  view before switching the originating client. Monotonic input IDs prevent an
+  older snapshot from replacing newer keyboard input. Coalesce previews per
+  client, and never acknowledge agent attention until content receives focus.
+  Vertical navigation and top/bottom jumps skip session titles; branch controls
+  and explicit session actions can still select them.
+- Window branches start collapsed. Persist explicit window expansions and transfer
+  them with preview state so snapshots do not close branches the user opened.
+  Retain pane rows in compact projections so expansion and search can reveal them.
+  Acknowledged preview state must not override newer persisted state on view restart.
+- Keep styling understated and integrated with tmux. Project structured labels,
+  icons and badges separately from legacy text, reserve room for status badges,
+  and keep one visual row per tree item. Render receipts include the content
+  viewport height so mouse actions cannot target rows underneath footer hints.
+  Clear the physical curses screen when visible row order or geometry changes;
+  retain incremental row updates while the layout is stable.
 - Keep @tmux_pane_tree_* options and legacy @tmux_sidebar_* compatibility at
   the boundary. New runtime state belongs in the coordinator, not flat tmux
   options or per-view IPC files.

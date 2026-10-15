@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from binder.runtime import Identity
 from ui.sidebar_ui_lib.application import View
@@ -104,6 +105,44 @@ class Keyboard(unittest.TestCase):
         self.view.handle_key("n")
         self.assertEqual(self.commands(), [])
 
+    def test_default_collapse_preserves_expansion_and_closes_future_windows(self):
+        message = {"type": "snapshot", "revision": 2, "rows": self.rows, "main": "%0", "focused": True, "collapse_panes": True}
+        self.view.accept(message)
+        self.assertEqual(self.view.selected, "$0/@0")
+        self.assertEqual(len(self.view.rows), 2)
+        self.view.handle_key("=")
+        self.view.accept({**message, "revision": 3})
+        self.assertEqual(len(self.view.rows), 4)
+        fresh = {"kind": "window", "key": "$0/@1", "parent": "$0", "text": "fresh"}
+        self.view.accept({**message, "revision": 4, "rows": self.rows + [fresh]})
+        self.assertIn("$0/@1", self.view.collapsed)
+        self.assertNotIn("$0/@0", self.view.collapsed)
+        self.view.select("$0/@0/%1")
+        self.view.handle_key("-")
+        self.assertEqual(self.view.selected, "$0/@0")
+        self.view.accept({**message, "revision": 5})
+        self.assertEqual(len(self.view.rows), 2)
+
+    def test_search_opens_hidden_pane_and_keeps_it_open_on_refresh(self):
+        message = {"type": "snapshot", "revision": 2, "rows": self.rows, "main": "%0", "focused": True, "collapse_panes": True}
+        self.view.accept(message)
+        for key in "/界":
+            self.view.handle_key(key)
+        self.view.accept({**message, "revision": 3})
+        self.assertEqual(self.view.selected, "$0/@0/%1")
+        self.assertEqual(len(self.view.rows), 4)
+
+    def test_saved_expansion_survives_view_restart(self):
+        self.view.snapshot = {}
+        self.view.accept({"type": "snapshot", "revision": 2, "rows": self.rows, "main": "%0", "focused": False, "collapse_panes": True, "view_state": {"expanded_windows": ["$0/@0"]}})
+        self.assertEqual(len(self.view.rows), 4)
+
+    def test_expanding_without_live_preview_moves_to_first_child(self):
+        self.view.handle_key("-")
+        self.view.handle_key("+")
+        self.view.handle_key("j")
+        self.assertEqual(self.view.selected, "$0/@0/%0")
+
     def test_removed_selection_moves_to_available_main(self):
         self.view.attributes = {}
         message = {"type": "snapshot", "revision": 2, "rows": self.rows[:-1], "main": "%0", "focused": True}
@@ -126,3 +165,69 @@ class Keyboard(unittest.TestCase):
         self.assertEqual(self.view.selected, "$0/@0/%0")
         self.view.accept({**message, "revision": 4, "focused": False, "main": "%1"})
         self.assertEqual(self.view.selected, "$0/@0/%1")
+
+    def test_live_navigation_includes_windows_and_batches_preview_until_draw(self):
+        self.view.snapshot.update(live_preview=True, client="client", focused=True)
+        for key in ("j", "k", "k"):
+            self.view.handle_key(key)
+        self.assertEqual(self.view.selected, "$0/@0")
+        self.assertEqual(self.commands(), [])
+        self.view.renderer = Mock()
+        self.view.draw()
+        previews = [message for message in self.commands() if message["command"] == "preview"]
+        self.assertEqual(len(previews), 1)
+        self.assertEqual(previews[0]["key"], "$0/@0")
+        self.assertFalse(self.view.preview_dirty)
+
+    def test_vertical_navigation_and_top_bottom_skip_session_titles(self):
+        self.view.rows += [
+            {"kind": "session", "key": "$1", "text": "ops"},
+            {"kind": "window", "key": "$1/@1", "parent": "$1", "text": "logs"},
+        ]
+        self.view.snapshot.update(rows=self.view.rows, live_preview=True)
+        self.view.select("$0/@0/%1")
+        self.view.handle_key("j")
+        self.assertEqual(self.view.selected, "$1/@1")
+        self.view.handle_key("k")
+        self.assertEqual(self.view.selected, "$0/@0/%1")
+        for key in "gg":
+            self.view.handle_key(key)
+        self.assertEqual(self.view.selected, "$0/@0")
+        self.view.handle_key("k")
+        self.assertEqual(self.view.selected, "$0/@0")
+        self.view.handle_key("G")
+        self.assertEqual(self.view.selected, "$1/@1")
+
+    def test_older_handoff_cannot_replace_newer_keyboard_input(self):
+        self.view.snapshot.update(live_preview=True, client="client", focused=True)
+        self.view.handle_key("G")
+        stamp = self.view.input_id
+        message = {**self.view.snapshot, "type": "snapshot", "revision": 2, "navigation": {"input_id": stamp - 1, "apply": True, "selected": "$0/@0/%0"}}
+        self.view.accept(message)
+        self.assertEqual(self.view.selected, "$0/@0/%1")
+        self.assertTrue(self.view.preview_waiting)
+        self.view.accept({**message, "navigation": {"input_id": stamp, "apply": False}})
+        self.assertFalse(self.view.preview_waiting)
+
+    def test_handoff_restores_search_and_navigation_before_destination_focus(self):
+        navigation = {"input_id": 100, "apply": True, "client": "origin", "selected": "$0/@0", "collapsed": ["$0/@0"], "expanded_windows": ["$1/@1"], "query": "界", "searching": True, "scroll": 3, "jumps": [["main", "%0"], ["sidebar", "$0/@0"]], "jump_index": 1, "origin_session": "$0"}
+        self.view.accept({"type": "snapshot", "revision": 2, "rows": self.rows, "focused": False, "main": "%0", "navigation": navigation})
+        self.assertEqual(self.view.selected, "$0/@0")
+        self.assertEqual(self.view.query, "界")
+        self.assertTrue(self.view.searching)
+        self.assertEqual(self.view.collapsed, {"$0/@0"})
+        self.assertEqual(self.view.expanded_windows, {"$1/@1"})
+        self.assertEqual(self.view.jumps[0], ("main", "%0"))
+        self.assertEqual(self.view.applied_input_id, 100)
+        self.assertFalse(self.view.preview_dirty)
+
+    def test_hidden_main_selects_its_collapsed_parent(self):
+        self.view.collapsed = {"$0/@0"}
+        self.view.accept({"type": "snapshot", "revision": 2, "rows": self.rows, "focused": False, "main": "%0"})
+        self.assertEqual(self.view.selected, "$0/@0")
+
+    def test_closing_a_header_requires_confirmation(self):
+        self.view.selected = "$0/@0"
+        self.view.handle_key("x")
+        self.assertEqual(self.view.prompt["action"], "confirm")
+        self.assertEqual(self.commands(), [])

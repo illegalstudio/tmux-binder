@@ -37,6 +37,18 @@ class Server:
         self.stopping = False
         self.waiter: subprocess.Popen | None = None
         self.save_at = 0.0
+        self.previews: dict[str, dict] = {}
+        self.previews_at = 0.0
+
+    def flush_previews(self) -> None:
+        pending, self.previews = self.previews, {}
+        self.previews_at = 0
+        assert self.application is not None
+        for client, message in pending.items():
+            try:
+                self.application.preview(message["pane"], self.row_for(message), client, message["state"])
+            except (ValueError, RuntimeError) as error:
+                self.emit(message["pane"], {"type": "notice", "error": str(error)})
 
     def watch_tmux(self) -> None:
         if self.waiter is not None:
@@ -156,14 +168,27 @@ class Server:
             if not peer.pane:
                 raise ValueError("Render acknowledgement requires a subscribed view")
             app.rendered[peer.pane] = int(message.get("revision", -1))
-            app.row_maps[peer.pane] = {"keys": message.get("keys", []), "scroll": int(message.get("scroll", 0))}
+            app.preview_rendered[peer.pane] = int(message.get("navigation_input_id", 0))
+            app.row_maps[peer.pane] = {"keys": message.get("keys", []), "scroll": int(message.get("scroll", 0)), "lines": int(message.get("lines", app.model.panes.get(peer.pane, {}).get("pane_height", 0)))}
             window = app.model.panes.get(peer.pane, {}).get("window_id", "")
-            state = {"collapsed": message.get("collapsed", []), "selected": message.get("selected", ""), "scroll": int(message.get("scroll", 0))}
+            state = {"collapsed": message.get("collapsed", []), "expanded_windows": message.get("expanded_windows", []), "selected": message.get("selected", ""), "scroll": int(message.get("scroll", 0))}
             if app.view_state.get(window) != state:
                 app.view_state[window] = state
                 self.save_at = time.monotonic() + 0.3
             return None
         self.flush_events()
+        if command == "preview":
+            client = app.client_for(pane, client)
+            state = message.get("state", {})
+            if not isinstance(state, dict):
+                raise ValueError("Invalid navigation state")
+            if client and int(state.get("input_id", 0)) > int(self.previews.get(client, {}).get("state", {}).get("input_id", 0)):
+                self.previews[client] = {**message, "pane": pane, "state": state}
+                if not self.previews_at:
+                    self.previews_at = time.monotonic() + .015
+            return None if peer.pane else {"ok": True}
+        if command not in {"subscribe", "doctor", "snapshot"}:
+            self.flush_previews()
         if command == "subscribe":
             if pane not in app.model.panes:
                 app.refresh()
@@ -183,7 +208,7 @@ class Server:
         elif command == "focus":
             app.focus(pane, message.get("window", ""), client)
         elif command == "focus-main":
-            app.focus_main(pane, client)
+            app.focus_main(pane, client, message.get("target", ""), message.get("session", ""))
         elif command in {"ensure", "refresh"}:
             app.refresh()
         elif command == "activate":
@@ -291,6 +316,8 @@ class Server:
                     timeout = min(1.0, max(0, self.events_at - now)) if self.events_at else 1.0
                     if self.application.navigations:
                         timeout = min(timeout, 0.01)
+                    if self.previews_at:
+                        timeout = min(timeout, max(0, self.previews_at - now))
                     if self.save_at:
                         timeout = min(timeout, max(0, self.save_at - now))
                     for key, mask in self.selector.select(timeout):
@@ -319,6 +346,8 @@ class Server:
                     if self.events_at and time.monotonic() >= self.events_at:
                         self.flush_events()
                         self.watch_tmux()
+                    if self.previews_at and time.monotonic() >= self.previews_at:
+                        self.flush_previews()
                     if not os.path.exists(self.identity.socket_path):
                         break
                     try:

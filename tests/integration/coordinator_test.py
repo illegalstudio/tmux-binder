@@ -180,6 +180,8 @@ class Coordinator(unittest.TestCase):
         server.api("menu-action", action="break_window", key=key)
         server.wait(lambda: server.api("doctor")["views"], 2)
         self.assertEqual(server.t("display-message", "-pt", server.main, "#{pane_pid}"), before)
+        server.api("activate", target=server.window)
+        self.assertNotEqual(server.api("doctor")["window_main"][server.window], server.main)
 
     def test_migration_removes_the_legacy_menu_wrapper_from_content_binding(self):
         server = self.server()

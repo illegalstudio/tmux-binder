@@ -4,6 +4,24 @@ All notable project versions are documented here.
 
 ## Unreleased
 
+- Restyle the sidebar with compact grouping, clear branch indicators, a theme-based
+  full-row selection, muted guides and right-aligned status badges that stay visible
+  beside long names. Add contextual key hints while focused. Support native tmux
+  color names and indices, and keep mouse targets outside the hint line.
+- Keep automatic window names while the sidebar has focus instead of renaming
+  them to Python. Preserve custom name formats and manual names, restore option
+  inheritance on close, and repair names already affected by the sidebar.
+- Skip session titles during vertical navigation and top/bottom jumps, moving
+  directly between window and pane rows while keeping live previews.
+- Start pane lists collapsed. Use `+` or `=` to expand and `-` to collapse the selected
+  branch, including compact single-pane windows. Keep explicit expansions across
+  navigation and reloads, show agent badges on collapsed windows and reveal search
+  matches. Add `@tmux_pane_tree_collapse_panes`, enabled by default.
+- Preview sessions, windows and panes live while moving through the sidebar.
+  Keep keyboard focus, search, collapsed branches and jump history across views;
+  Enter focuses the chosen content. Previewing preserves attention badges.
+- Add `@tmux_pane_tree_live_preview`, enabled by default. Turning it off retains
+  navigation that waits for Enter.
 - Rebuilt the runtime around one Python coordinator per tmux server. Native hooks,
   cached topology and push updates replace repeated shell pipelines and per-view
   tmux polling. Bash entrypoints and existing configuration options stay compatible.

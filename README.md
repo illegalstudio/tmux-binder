@@ -9,18 +9,18 @@ A persistent session tree on the left of every tmux window, with live status
 badges for `claude`, `codex`, `cursor`, `opencode`, `pi`, and `kiro`.
 
 ```
-  ┌─ Sidebar ────────────┬────────────────────────────────┐
-  │   ├─ work            │  $ claude                      │
-  │   │  └─ zsh          │                                │
-  │   │     ├─ claude    │  Working on your request...    │
-  │   │     └─ zsh       │                                │
-  │   └─ env             │                                │
-  │      ├─ claude       │                                │
-  │      │  ├─ lazygit   │                                │
-  │ ▶    │  ├─ claude ⏳│                                │
-  │      │  └─ yazi      │                                │
-  │      └─ yazi         │                                │
-  └──────────────────────┴────────────────────────────────┘
+  ┌─ Sidebar ──────────────┬────────────────────────────────┐
+  │  work                  │$ claude                        │
+  │   ▾ api                │                                │
+  │     C claude         ❓│Working on your request...      │
+  │     $ bash             │                                │
+  │▶  ▸ jobs             ⏳│                                │
+  │  ops                   │                                │
+  │   ▸ logs               │                                │
+  │                        │                                │
+  │                        │                                │
+  │= expand  / search      │                                │
+  └────────────────────────┴────────────────────────────────┘
 ```
 
 ![tmux-pane-tree showcase](images/showcase.gif)
@@ -85,13 +85,15 @@ Inside the sidebar:
 
 | Key                  | Action                            |
 | -------------------- | --------------------------------- |
-| `j` / `k`, arrows    | Move selection                    |
+| `j` / `k`, arrows    | Move selection and preview live   |
 | `gg` / `G`           | Top / bottom                      |
 | `Ctrl+o` / `Ctrl+i`  | Jump list back / forward          |
-| `Enter`              | Jump to the selected pane         |
+| `Enter`              | Focus the selected content        |
+| `+` / `=`            | Expand selected branch            |
+| `-`                  | Collapse selected branch          |
 | `aw` / `as`          | Add window / session (prompts)    |
 | `rw` / `rs`          | Rename window / session           |
-| `x`                  | Close the selected pane           |
+| `x`                  | Close item; confirm for headers   |
 | `f`                  | Toggle pane filter                |
 | `p`                  | Toggle hide-panes mode            |
 | `Ctrl+l`             | Return focus to the main pane     |
@@ -103,6 +105,31 @@ to collapse and expand branches. Use / to search and n/N to move between matches
 Use m or right click to open the context menu. Collapsed branches survive reloads.
 Context menus also provide splitting, zoom, marking and moving a pane to a new
 window. Session menus can detach their clients.
+
+Pane lists start collapsed, leaving sessions and windows visible. Select a window
+and press `+` or `=` to show its panes, or `-` to hide them. Pressing `-` on a pane
+returns to its window row. Explicit expansions survive navigation and reloads;
+new windows start collapsed. Collapsed windows retain their most urgent agent
+badge, and search opens matching panes automatically.
+
+The tree uses compact indentation and `▸` / `▾` branch indicators. Session
+headings, a full-row selection highlight and muted guides follow your tmux theme.
+Status badges stay aligned on the right, even when a long name is truncated.
+A small key hint appears at the bottom while the sidebar has focus.
+
+Moving through window and pane rows immediately shows their live window contents.
+Session titles stay visible and are skipped by j/k, the up/down arrows and gg/G.
+Keyboard focus stays in the sidebar, so you can continue browsing.
+Enter or Ctrl+l focuses the selected content. Search, collapsed branches and
+navigation history follow you across sessions and windows. Previewing a pane
+keeps its attention badge until you actually focus it.
+
+Window names remain stable while the sidebar has focus. Tmux's automatic naming
+and custom name formats continue when you return to a content pane. Manually
+assigned names are preserved.
+
+Set `@tmux_pane_tree_live_preview` to `off` to browse without changing the visible
+window until Enter. This also keeps the previous navigation through pane rows.
 
 New windows and sessions insert next to the selected row. Closing the last
 pane removes its window, and the last window removes its session.
@@ -124,19 +151,21 @@ Set options with `set -g` in your tmux config.
 | ----------------------------------------- | :-----: | --------------------------------------------- |
 | `@tmux_pane_tree_width`                   |  `25`   | Sidebar column width                          |
 | `@tmux_pane_tree_focus_on_open`           |   `1`   | Focus the sidebar when toggled open           |
+| `@tmux_pane_tree_live_preview`            |  `on`   | Preview selected content while browsing       |
 | `@tmux_pane_tree_toggle_key`              |   `t`   | Prefix key to toggle                          |
 | `@tmux_pane_tree_focus_key`               |   `T`   | Prefix key to focus                           |
 | `@tmux_pane_tree_session_order`           |    -    | Comma-separated session order, rest follow    |
 | `@tmux_pane_tree_filter`                  |    -    | Comma-separated pane filter (see below)       |
 | `@tmux_pane_tree_hide_panes`              |  `off`  | Show only sessions and windows                |
+| `@tmux_pane_tree_collapse_panes`          |  `on`   | Start window branches with panes collapsed    |
 | `@tmux_pane_tree_compact_single_panes`    |  `off`  | Fold single-pane windows into one row         |
 | `@tmux_pane_tree_scrolloff`               |   `8`   | Rows kept visible around the cursor, `0` off  |
 | `@tmux_pane_tree_icon_theme`              | `auto`  | `auto`, `ascii`, `unicode`, or `nerdfont`     |
 | `@tmux_pane_tree_icon_<app>`              |    -    | Override one app icon                         |
 | `@tmux_pane_tree_badge_<status>`          |    -    | Override one status badge                     |
-| `@tmux_pane_tree_color_session`           |    -    | Session name color, hex                       |
-| `@tmux_pane_tree_color_window`            |    -    | Window name color, hex                        |
-| `@tmux_pane_tree_color_pane`              |    -    | Pane name color, hex                          |
+| `@tmux_pane_tree_color_session`           |    -    | Session name color, tmux color or hex         |
+| `@tmux_pane_tree_color_window`            |    -    | Window name color, tmux color or hex          |
+| `@tmux_pane_tree_color_pane`              |    -    | Pane name color, tmux color or hex            |
 | `@tmux_pane_tree_install_agent_hooks`     |   `0`   | Install agent hooks when the plugin loads     |
 | `@tmux_pane_tree_<action>_shortcut`       |    -    | Override a sidebar shortcut (see below)       |
 
@@ -157,6 +186,8 @@ set -g @tmux_pane_tree_filter "claude,codex,cursor,opencode"
 `on` to show a window with one content pane as one selectable row. The row
 retains the pane's agent status badge. The sidebar pane does not count, and
 filtering does not turn a multi-pane window into a compact row.
+Press `+` or `=` to reveal the pane row even in compact mode. Set
+`@tmux_pane_tree_collapse_panes` to `off` to start ordinary windows expanded.
 
 ```tmux
 set -g @tmux_pane_tree_compact_single_panes on
@@ -186,7 +217,10 @@ set -g @tmux_pane_tree_icon_claude "A"
 set -g @tmux_pane_tree_badge_running "*"
 ```
 
-**Colors.** Unset colors derive from your tmux theme.
+**Colors.** Unset colors derive from your tmux theme. Named colors, `colourN`
+indices and hex values are supported. Selection uses `window-status-current-style`,
+falling back to the active pane border accent. Inactive sidebars keep a muted
+cursor. Terminals without 256-color support use a monochrome highlight.
 
 **Sidebar width.** Drag its border or use tmux's pane resize commands. The
 chosen width is saved and shared across existing and new windows, including

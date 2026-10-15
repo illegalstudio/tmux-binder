@@ -27,6 +27,9 @@ wait_for_selected_capture() {
 
 real_tmux_start_server
 real_tmux_source_plugin
+# Exercise confirmation navigation; live previews have separate PTY coverage.
+real_tmux set-option -g @tmux_pane_tree_live_preview off
+real_tmux set-option -g @tmux_pane_tree_collapse_panes off
 
 real_tmux new-session -d -s ops -n logs 'cat'
 real_tmux new-session -d -s tailing -n third 'tail -f /dev/null'
@@ -45,15 +48,15 @@ sidebar_pane_id="$(real_tmux_wait_for_sidebar_pane "$main_window_id")"
 initial_capture="$(real_tmux_wait_for_capture "$sidebar_pane_id" 'tailing')"
 assert_contains "$initial_capture" 'work'
 assert_contains "$initial_capture" 'editor'
-assert_contains "$initial_capture" '▶ │     └─ $ '
+assert_contains "$initial_capture" '▶    $ '
 
 real_tmux select-pane -t "$sidebar_pane_id"
 assert_eq "$(real_tmux display-message -p -t "$sidebar_pane_id" '#{pane_active}')" "1"
 
 real_tmux send-keys -t "$sidebar_pane_id" G
-bottom_capture="$(wait_for_selected_capture "$sidebar_pane_id" '▶       └─ : tail')"
+bottom_capture="$(wait_for_selected_capture "$sidebar_pane_id" '▶    : tail')"
 assert_contains "$bottom_capture" 'tailing'
 
 real_tmux send-keys -t "$sidebar_pane_id" g g
-top_capture="$(wait_for_selected_capture "$sidebar_pane_id" '▶ │     └─ c cat')"
+top_capture="$(wait_for_selected_capture "$sidebar_pane_id" '▶    c cat')"
 assert_contains "$top_capture" 'ops'

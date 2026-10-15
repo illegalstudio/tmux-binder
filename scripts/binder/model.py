@@ -122,7 +122,7 @@ def project_rows(model: Model, states: dict[str, dict], options: dict[str, str],
         sid, name = session["session_id"], session["session_name"]
         last_session = si == len(groups) - 1
         prefix = "   " if last_session else "│  "
-        rows.append({"kind": "session", "key": sid, "session_id": sid, "session": name, "text": f"{'└─' if last_session else '├─'} {name}"})
+        rows.append({"kind": "session", "key": sid, "session_id": sid, "session": name, "label": name, "expandable": True, "text": f"{'└─' if last_session else '├─'} {name}"})
         for wi, (window, content, panes) in enumerate(windows):
             wid = window["window_id"]
             key = sid + "/" + wid
@@ -132,19 +132,28 @@ def project_rows(model: Model, states: dict[str, dict], options: dict[str, str],
             label = window_display_name(window["window_name"], legacy_panes, states)
             compact_window = compact and len(content) == 1
             visible_panes = panes
-            window_row = {"kind": "window", "key": key, "parent": sid, "session_id": sid, "session": name, "window": wid, "name": window["window_name"]}
+            window_row = {"kind": "window", "key": key, "parent": sid, "session_id": sid, "session": name, "window": wid, "name": window["window_name"], "label": label}
             if compact_window:
+                window_row["compact"] = True
                 pane_id = panes[0]["pane_id"]
                 window_row["pane_id"] = pane_id
                 badge = badges.get(statuses.get(pane_id, ""), "")
+                window_row.update(badge=badge, status=statuses.get(pane_id, ""))
                 if badge:
                     label += " " + badge
-                visible_panes = []
             elif hide:
                 visible_panes = [pane for pane in panes if badges.get(statuses.get(pane["pane_id"], ""), "")]
                 if not visible_panes:
                     window_row["pane_id"] = wid
             window_row["text"] = f"{prefix}{'└─' if last_window else '├─'} {label}"
+            window_row["expandable"] = bool(visible_panes)
+            if not compact_window:
+                active = {statuses.get(pane["pane_id"], "") for pane in panes}
+                status = next((status for status in ("needs-input", "error", "subagent-running", "running", "done") if status in active and badges.get(status)), "")
+                badge = badges.get(status, "")
+                if badge:
+                    window_row["collapsed_text"] = window_row["text"] + " " + badge
+                    window_row.update(collapsed_badge=badge, collapsed_status=status)
             rows.append(window_row)
             for pi, pane in enumerate(visible_panes):
                 pid = pane["pane_id"]
@@ -155,5 +164,5 @@ def project_rows(model: Model, states: dict[str, dict], options: dict[str, str],
                 badge = badges.get(statuses.get(pid, ""), "")
                 text = f"{pane_prefix}{'└─' if pi == len(visible_panes) - 1 else '├─'} "
                 text += (icon + " " if icon else "") + label + (" " + badge if badge else "")
-                rows.append({"kind": "pane", "key": key + "/" + pid, "parent": key, "pane_id": pid, "session_id": sid, "session": name, "window": wid, "name": window["window_name"], "text": text, "status": statuses.get(pid, "")})
+                rows.append({"kind": "pane", "key": key + "/" + pid, "parent": key, "pane_id": pid, "session_id": sid, "session": name, "window": wid, "name": window["window_name"], "text": text, "label": label, "icon": icon, "badge": badge, "status": statuses.get(pid, "")})
     return rows

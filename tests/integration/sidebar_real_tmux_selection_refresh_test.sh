@@ -19,6 +19,9 @@ wait_for_selected_line() {
 
 real_tmux_start_server
 real_tmux_source_plugin
+# Exercise confirmation navigation; live previews have separate PTY coverage.
+real_tmux set-option -g @tmux_pane_tree_live_preview off
+real_tmux set-option -g @tmux_pane_tree_collapse_panes off
 real_tmux rename-session -t work SessionX
 real_tmux rename-window -t SessionX:editor SessionX
 real_tmux new-session -d -s codexCiao -n codexCiao 'tail -f /dev/null'

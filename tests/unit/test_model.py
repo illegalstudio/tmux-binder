@@ -68,6 +68,15 @@ class TreeProjection(unittest.TestCase):
         logs = next(row for row in rows if row.get("window") == "@1")
         self.assertEqual(logs["kind"], "window")
         self.assertEqual(logs["pane_id"], "%2")
+        self.assertTrue(logs["compact"])
+        self.assertTrue(any(row["kind"] == "pane" and row["parent"] == logs["key"] for row in rows))
+
+    def test_collapsed_windows_keep_the_most_urgent_badge(self):
+        self.model.panes["%1"].update(pane_current_command="codex", pane_title="codex")
+        rows = self.project({"%0": {"app": "claude", "status": "running"}, "%1": {"app": "codex", "status": "needs-input"}})
+        editor = next(row for row in rows if row["key"] == "$0/@0")
+        self.assertTrue(editor["collapsed_text"].endswith("❓"))
+        self.assertNotIn("❓", editor["text"])
 
     def test_session_order_and_unknown_entries(self):
         rows = self.project(session_order="missing,ops,work")

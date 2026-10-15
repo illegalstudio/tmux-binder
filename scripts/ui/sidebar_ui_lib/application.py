@@ -26,6 +26,7 @@ class View:
         self.rows: list[dict] = []
         self.selected = ""
         self.collapsed: set[str] = set()
+        self.expanded_windows: set[str] = set()
         self.scroll = 0
         self.user_scrolled = False
         self.pending = ""
@@ -40,6 +41,11 @@ class View:
         self.jumps: list[tuple[str, str]] = []
         self.jump_index = -1
         self.running = True
+        self.preview_dirty = False
+        self.preview_waiting = False
+        self.input_id = 0
+        self.applied_input_id = 0
+        self.origin_session = ""
 
     def send(self, command: str, **values: object) -> None:
         self.outgoing.extend(encode({"command": command, "pane": self.pane, "client": self.snapshot.get("client", ""), **values}))
@@ -57,6 +63,7 @@ class View:
 
     def accept(self, message: dict) -> None:
         if "error" in message:
+            self.preview_waiting = False
             self.notice = message["error"]
             self.notice_until = time.monotonic() + 5
             self.dirty = True
@@ -74,29 +81,57 @@ class View:
         if not previous:
             saved = message.get("view_state", {})
             self.collapsed = set(saved.get("collapsed", []))
+            self.expanded_windows = set(saved.get("expanded_windows", []))
             self.selected = saved.get("selected", "")
             self.scroll = saved.get("scroll", 0)
+        navigation = message.get("navigation", {})
+        navigation_id = int(navigation.get("input_id", 0))
+        transferred = False
+        if navigation_id and navigation_id >= self.input_id:
+            self.preview_waiting = False
+            self.applied_input_id = max(self.applied_input_id, navigation_id)
+            if navigation.get("apply") and navigation_id > self.input_id:
+                self.input_id = navigation_id
+                self.selected = navigation["selected"]
+                self.collapsed = set(navigation.get("collapsed", []))
+                self.expanded_windows = set(navigation.get("expanded_windows", []))
+                self.scroll = navigation.get("scroll", 0)
+                self.query = navigation.get("query", "")
+                self.searching = navigation.get("searching", False)
+                self.jumps = [tuple(entry) for entry in navigation.get("jumps", [])]
+                self.jump_index = navigation.get("jump_index", -1)
+                self.origin_session = navigation.get("origin_session", "")
+                self.snapshot["client"] = navigation["client"]
+                transferred = True
+        self.collapsed.update(row["key"] for row in message["rows"] if row["kind"] == "window" and (message.get("collapse_panes", False) or row.get("compact")) and row["key"] not in self.expanded_windows)
         self.rows = visible_rows(message["rows"], self.collapsed)
         main = message.get("main", "")
-        if not message.get("focused"):
+        if not message.get("focused") and not transferred and not self.preview_waiting:
             reset = not previous or previous.get("focused") or previous.get("main") != main
-            self.selected = selection_for(self.rows, "" if reset else self.selected, main)
+            self.selected = selection_for(self.rows, "" if reset else self.selected, main, message["rows"])
             if reset:
                 self.jumps = []
                 self.jump_index = -1
+                self.searching = False
+                self.pending = ""
         else:
-            self.selected = selection_for(self.rows, self.selected, main)
+            self.selected = selection_for(self.rows, self.selected, main, message["rows"])
             if not self.jumps:
                 self.jumps = [("main", main), ("sidebar", self.selected)] if main else [("sidebar", self.selected)]
                 self.jump_index = len(self.jumps) - 1
+                self.origin_session = message.get("session", "")
         if previous.get("colors") != message.get("colors") or previous.get("styles") != message.get("styles"):
             self.attributes = colors(message.get("colors", {}), message.get("styles", {}))
+            self.renderer.invalidate()
+        if message.get("visible") and not previous.get("visible"):
+            self.renderer.invalidate()
         self.dirty = True
 
     def row(self, key: str = "") -> dict | None:
         return next((row for row in self.snapshot.get("rows", []) if row["key"] == (key or self.selected)), None)
 
-    def select(self, key: str, record: bool = False) -> None:
+    def select(self, key: str, record: bool = False, preview: bool = False) -> None:
+        changed = key != self.selected
         self.selected = key
         self.user_scrolled = False
         self.dirty = True
@@ -106,6 +141,10 @@ class View:
             if not self.jumps or self.jumps[-1] != entry:
                 self.jumps.append(entry)
             self.jump_index = len(self.jumps) - 1
+        if changed and preview and self.snapshot.get("live_preview"):
+            self.input_id = time.monotonic_ns()
+            self.preview_dirty = True
+            self.preview_waiting = True
 
     def search_next(self, direction: int) -> None:
         raw = self.snapshot.get("rows", [])
@@ -123,8 +162,28 @@ class View:
         index = next((index for index, row in enumerate(matches) if row["key"] == self.selected), -1 if direction > 0 else 0)
         row = matches[(index + direction) % len(matches)]
         self.collapsed = {parent for parent in self.collapsed if not row["key"].startswith(parent + "/")}
+        self.expanded_windows.update(parent["key"] for parent in raw if parent["kind"] == "window" and row["key"].startswith(parent["key"] + "/"))
         self.rows = visible_rows(raw, self.collapsed)
-        self.select(row["key"])
+        self.select(row["key"], preview=True)
+
+    def branch(self, key: str, expand: bool) -> None:
+        row = self.row(key)
+        if not row:
+            return
+        if row["kind"] == "pane":
+            self.branch(row["parent"], expand)
+            return
+        if expand:
+            self.collapsed.discard(key)
+            if row["kind"] == "window":
+                self.expanded_windows.add(key)
+        else:
+            self.collapsed.add(key)
+            self.expanded_windows.discard(key)
+        self.rows = visible_rows(self.snapshot.get("rows", []), self.collapsed)
+        if not expand and self.selected.startswith(key + "/"):
+            self.select(key, preview=True)
+        self.dirty = True
 
     def action(self, action: str, key: str = "") -> None:
         if key:
@@ -136,19 +195,27 @@ class View:
                 self.jump_index = index
                 location, value = self.jumps[index]
                 if location == "main":
-                    self.send("focus-main")
+                    self.preview_dirty = False
+                    self.preview_waiting = False
+                    self.send("focus-main", target=value, session=self.origin_session)
                 else:
-                    self.select(value)
+                    self.select(value, preview=True)
             return
         if action == "close":
+            self.preview_dirty = False
+            self.preview_waiting = False
             self.send("close")
         elif action == "focus_main":
+            self.preview_dirty = False
+            self.preview_waiting = False
             self.send("focus-main")
         elif action in {"go_top", "go_bottom"}:
-            targets = navigable(self.rows, self.collapsed)
+            targets = navigable(self.rows, self.collapsed, self.snapshot.get("live_preview", False))
             if targets:
-                self.select(targets[0 if action == "go_top" else -1]["key"], True)
+                self.select(targets[0 if action == "go_top" else -1]["key"], True, preview=True)
         elif action == "select" and row:
+            self.preview_dirty = False
+            self.preview_waiting = False
             self.send("activate", key=row["key"])
         elif action in {"add_window", "add_session", "rename_window", "rename_session", "rename"} and row:
             if action == "rename":
@@ -158,7 +225,10 @@ class View:
         elif action == "confirm_close" and row:
             self.prompt = {"action": "confirm", "key": row["key"], "text": "", "label": "Close selected item? [y/N] "}
         elif action == "close_pane" and row:
-            targets = navigable(self.rows, self.collapsed)
+            if row["kind"] != "pane":
+                self.action("confirm_close")
+                return
+            targets = navigable(self.rows, self.collapsed, self.snapshot.get("live_preview", False))
             index = next((index for index, item in enumerate(targets) if item["key"] == self.selected), 0)
             if len(targets) > 1:
                 self.select(targets[index + 1 if index + 1 < len(targets) else index - 1]["key"])
@@ -172,6 +242,7 @@ class View:
     def handle_key(self, key: str | int) -> None:
         if key == curses.KEY_RESIZE:
             curses.update_lines_cols()
+            self.renderer.invalidate()
             self.dirty = True
             return
         if key == curses.KEY_MOUSE:
@@ -228,11 +299,15 @@ class View:
                 self.action(action)
             return
         if key in {"j", "k", curses.KEY_DOWN, curses.KEY_UP}:
-            targets = navigable(self.rows, self.collapsed)
+            targets = navigable(self.rows, self.collapsed, self.snapshot.get("live_preview", False))
             if targets:
-                index = next((i for i, row in enumerate(targets) if row["key"] == self.selected), 0)
-                index = max(0, min(len(targets) - 1, index + (1 if key in {"j", curses.KEY_DOWN} else -1)))
-                self.select(targets[index]["key"])
+                down = key in {"j", curses.KEY_DOWN}
+                position = next((i for i, row in enumerate(self.rows) if row["key"] == self.selected), -1)
+                target_keys = {row["key"] for row in targets}
+                candidates = self.rows[position + 1:] if down else self.rows[:position][::-1]
+                target = next((row for row in candidates if row["key"] in target_keys), None)
+                if target:
+                    self.select(target["key"], preview=True)
         elif key in {"q", "\x1b"}:
             self.action("close")
         elif key == "\x0c":
@@ -250,21 +325,20 @@ class View:
         elif key in {"h", curses.KEY_LEFT}:
             row = self.row()
             if row:
-                parent = row.get("parent", row["key"])
-                self.collapsed.add(parent)
-                self.rows = visible_rows(self.snapshot.get("rows", []), self.collapsed)
-                self.select(parent)
-        elif key in {"l", curses.KEY_RIGHT}:
-            if self.selected in self.collapsed:
-                self.collapsed.remove(self.selected)
-                self.rows = visible_rows(self.snapshot.get("rows", []), self.collapsed)
-                self.dirty = True
+                self.branch(row.get("parent", row["key"]), False)
+        elif key in {"l", curses.KEY_RIGHT, "+", "="}:
+            self.branch(self.selected, True)
+        elif key == "-":
+            self.branch(self.selected, False)
 
     def mouse(self) -> None:
         try:
             _, _, y, _, state = curses.getmouse()
         except curses.error:
             return
+        if state & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED | curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED):
+            if not 0 <= y < self.screen.getmaxyx()[0] - bool(self.footer()):
+                return
         if state & curses.BUTTON4_PRESSED:
             self.scroll = max(0, self.scroll - 3)
             self.user_scrolled = True
@@ -280,16 +354,33 @@ class View:
             self.send("menu", row=y)
         self.dirty = True
 
+    def footer(self) -> str:
+        if self.prompt:
+            return self.prompt["label"] + self.prompt["text"]
+        if self.searching or self.query:
+            return "/" + self.query
+        if self.notice:
+            return self.notice
+        if not self.snapshot.get("focused") or self.screen.getmaxyx()[0] < 3:
+            return ""
+        row = self.row()
+        if row and row.get("expandable"):
+            return ("= expand" if row["key"] in self.collapsed else "- collapse") + "  / search"
+        return "Enter focus  / search"
+
     def draw(self) -> None:
-        footer = self.prompt["label"] + self.prompt["text"] if self.prompt else "/" + self.query if self.searching or self.query else self.notice
+        footer = self.footer()
         height, _ = self.screen.getmaxyx()
         lines = max(0, height - bool(footer))
         index = next((index for index, row in enumerate(self.rows) if row["key"] == self.selected), -1)
         if not self.user_scrolled:
             self.scroll = ensure_visible(index, self.scroll, lines, self.snapshot.get("scrolloff", 8))
         self.scroll = min(max(0, self.scroll), max(0, len(self.rows) - lines))
-        self.renderer.draw(self.rows, self.selected, self.scroll, self.attributes, self.query, footer, self.searching or bool(self.prompt), self.collapsed)
-        self.send("rendered", revision=self.revision, keys=[row["key"] for row in self.rows], scroll=self.scroll, selected=self.selected, collapsed=sorted(self.collapsed))
+        self.renderer.draw(self.rows, self.selected, self.scroll, self.attributes, self.query, footer, self.searching or bool(self.prompt), self.collapsed, focused=self.snapshot.get("focused", False))
+        self.send("rendered", revision=self.revision, keys=[row["key"] for row in self.rows], scroll=self.scroll, lines=lines, selected=self.selected, collapsed=sorted(self.collapsed), expanded_windows=sorted(self.expanded_windows), navigation_input_id=self.applied_input_id)
+        if self.preview_dirty:
+            self.send("preview", key=self.selected, state={"input_id": self.input_id, "selected": self.selected, "collapsed": sorted(self.collapsed), "expanded_windows": sorted(self.expanded_windows), "scroll": self.scroll, "query": self.query, "searching": self.searching, "jumps": self.jumps, "jump_index": self.jump_index, "origin_session": self.origin_session})
+            self.preview_dirty = False
         self.dirty = False
 
     def run(self) -> None:
