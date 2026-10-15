@@ -4,6 +4,9 @@ All notable project versions are documented here.
 
 ## Unreleased
 
+- Make `h` and Left behave like `-`, collapsing the selected window or its pane's
+  window. Keep session headings expanded so j/k can always reach their windows,
+  and recover session branches hidden by previously saved collapse state.
 - Restyle the sidebar with compact grouping, clear branch indicators, a theme-based
   full-row selection, muted guides and right-aligned status badges that stay visible
   beside long names. Add contextual key hints while focused. Support native tmux

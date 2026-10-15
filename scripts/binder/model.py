@@ -122,7 +122,7 @@ def project_rows(model: Model, states: dict[str, dict], options: dict[str, str],
         sid, name = session["session_id"], session["session_name"]
         last_session = si == len(groups) - 1
         prefix = "   " if last_session else "│  "
-        rows.append({"kind": "session", "key": sid, "session_id": sid, "session": name, "label": name, "expandable": True, "text": f"{'└─' if last_session else '├─'} {name}"})
+        rows.append({"kind": "session", "key": sid, "session_id": sid, "session": name, "label": name, "text": f"{'└─' if last_session else '├─'} {name}"})
         for wi, (window, content, panes) in enumerate(windows):
             wid = window["window_id"]
             key = sid + "/" + wid

@@ -56,7 +56,9 @@ view per sidebar pane. Bash files are compatibility launchers.
   older snapshot from replacing newer keyboard input. Coalesce previews per
   client, and never acknowledge agent attention until content receives focus.
   Vertical navigation and top/bottom jumps skip session titles; branch controls
-  and explicit session actions can still select them.
+  only expand/collapse windows. Session headings stay expanded and explicit
+  session actions can still select them. Drop legacy session collapses when
+  restoring view state or accepting a preview handoff.
 - Window branches start collapsed. Persist explicit window expansions and transfer
   them with preview state so snapshots do not close branches the user opened.
   Retain pane rows in compact projections so expansion and search can reveal them.

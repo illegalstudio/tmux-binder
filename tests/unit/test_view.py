@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import curses
 import json
 import unittest
 from pathlib import Path
@@ -99,6 +100,38 @@ class Keyboard(unittest.TestCase):
         self.assertEqual(len(self.view.rows), 2)
         self.view.handle_key("l")
         self.assertEqual(len(self.view.rows), 4)
+
+    def test_window_collapse_never_hides_its_session(self):
+        for key in ("h", curses.KEY_LEFT, "-"):
+            with self.subTest(key=key):
+                self.view.select("$0/@0")
+                self.view.branch("$0/@0", True)
+                for _ in range(2):
+                    self.view.handle_key(key)
+                    self.assertEqual(self.view.selected, "$0/@0")
+                    self.assertEqual([row["key"] for row in self.view.rows], ["$0", "$0/@0"])
+                    self.assertNotIn("$0", self.view.collapsed)
+
+    def test_session_headers_ignore_branch_controls(self):
+        self.view.select("$0")
+        for key in ("h", curses.KEY_LEFT, "-", "l", curses.KEY_RIGHT, "+", "="):
+            with self.subTest(key=key):
+                self.view.handle_key(key)
+                self.assertEqual(self.view.rows, self.rows)
+                self.assertEqual(self.view.collapsed, set())
+
+    def test_old_session_collapses_are_cleared_on_restore_and_handoff(self):
+        for source in ("view_state", "navigation"):
+            with self.subTest(source=source):
+                self.view.snapshot = {}
+                self.view.input_id = 0
+                state = {"collapsed": ["$0", "$0/@0"], "selected": "$0/@0"}
+                if source == "navigation":
+                    state.update(input_id=100, apply=True, client="origin")
+                self.view.accept({"type": "snapshot", "revision": 2, "rows": self.rows, "main": "%0", "focused": True, source: state})
+                self.assertEqual(self.view.collapsed, {"$0/@0"})
+                self.assertEqual([row["key"] for row in self.view.rows], ["$0", "$0/@0"])
+                self.assertEqual(self.view.selected, "$0/@0")
 
     def test_menu_confirmation_can_be_cancelled(self):
         self.view.action("confirm_close")

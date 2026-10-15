@@ -9,6 +9,55 @@ from live_preview_real_test import Terminal
 
 
 class CollapsedPanes(unittest.TestCase):
+    def test_left_collapse_keeps_sessions_reachable(self):
+        with tempfile.TemporaryDirectory(prefix="binder-branch-navigation-") as directory:
+            server = Harness(Path(directory))
+            terminal = None
+            try:
+                other = server.t("new-session", "-dP", "-F", "#{pane_id}", "-s", "ops", "-n", "logs", "sleep 86400")
+                window = server.t("display-message", "-pt", other, "#{window_id}")
+                server.t("set-option", "-g", "@tmux_pane_tree_session_order", "work,ops")
+                terminal = Terminal(server)
+                terminal.wait(lambda: server.t("display-message", "-pt", server.main, "#{session_attached}"), "1")
+                terminal.keys("\x02t")
+                terminal.wait(lambda: bool(server.sidebar(server.window)))
+                terminal.keys("\x02T")
+                terminal.wait(lambda: terminal.location()[2], server.sidebar(server.window))
+                terminal.wait(lambda: "\u25b8 editor" in terminal.frame())
+
+                def selected():
+                    return next((line for line in terminal.frame().splitlines() if line.startswith("\u25b6")), "")
+
+                for key in ("h", "\x1bOD", "-"):
+                    terminal.keys(key)
+                    terminal.drain(.1)
+                    self.assertIn("editor", selected())
+                    self.assertIn("logs", terminal.frame())
+                    self.assertNotIn("\u25b8 work", terminal.frame())
+                    terminal.keys("j")
+                    terminal.wait(lambda: terminal.location(), ["ops", window, server.sidebar(window)])
+                    terminal.wait(lambda: "logs" in selected())
+                    terminal.keys("k")
+                    terminal.wait(lambda: "editor" in selected())
+
+                terminal.keys("l")
+                terminal.wait(lambda: terminal.frame().count("sleep"), 1)
+                terminal.keys("jh")
+                terminal.wait(lambda: "editor" in selected())
+                terminal.wait(lambda: "\u25b8 editor" in terminal.frame())
+                self.assertNotIn("sleep", terminal.frame())
+                terminal.keys("hh")
+                terminal.drain(.1)
+                self.assertIn("editor", selected())
+                self.assertIn("logs", terminal.frame())
+                terminal.keys("j")
+                terminal.wait(lambda: terminal.location(), ["ops", window, server.sidebar(window)])
+                terminal.wait(lambda: "logs" in selected())
+            finally:
+                if terminal is not None:
+                    terminal.close()
+                server.close()
+
     def test_vertical_navigation_skips_session_titles(self):
         with tempfile.TemporaryDirectory(prefix="binder-navigation-") as directory:
             server = Harness(Path(directory))
@@ -95,6 +144,8 @@ class CollapsedPanes(unittest.TestCase):
                 self.assertEqual(terminal.frame().count("sleep"), 2)
                 terminal.keys("G")
                 terminal.wait(lambda: "fresh" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
+                fresh = server.t("display-message", "-pt", "ops:fresh", "#{window_id}")
+                terminal.wait(lambda: terminal.location(), ["ops", fresh, server.sidebar(fresh)])
                 terminal.keys("+")
                 terminal.wait(lambda: terminal.frame().count("sleep"), 3)
             finally:

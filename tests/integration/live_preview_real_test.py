@@ -151,7 +151,13 @@ class LivePreview(unittest.TestCase):
                 terminal = Terminal(server)
                 self.open(server, terminal)
                 sidebar = server.sidebar(server.window)
-                terminal.keys("jjjh")
+                session = server.t("display-message", "-pt", "ops:5", "#{session_id}")
+                origin = server.t("display-message", "-pt", "work:editor", "#{session_id}")
+                server.api("preview", pane=sidebar, key=session, state={
+                    "input_id": time.monotonic_ns(), "selected": session,
+                    "origin_session": origin,
+                    "jumps": [["main", server.main], ["sidebar", session]], "jump_index": 1,
+                })
                 terminal.wait(lambda: terminal.location(), ["ops", server.window, sidebar])
                 terminal.wait(lambda: "ops" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
                 terminal.keys("\x0f")
@@ -173,13 +179,13 @@ class LivePreview(unittest.TestCase):
                 self.open(server, terminal)
                 server.api("update-state", pane=other, event={"app": "claude", "status": "needs-input"})
                 terminal.keys("hh")
-                terminal.wait(lambda: "▸ work" in terminal.frame())
+                terminal.wait(lambda: "▸ editor" in terminal.frame())
                 terminal.keys("/op")
                 terminal.wait(lambda: terminal.location(), ["ops", window, server.sidebar(window)])
                 terminal.keys("s")
                 terminal.wait(lambda: "/ops" in terminal.frame())
-                self.assertIn("▸ work", terminal.frame())
-                self.assertNotIn("editor", terminal.frame())
+                self.assertIn("▸ editor", terminal.frame())
+                self.assertNotIn("▾ editor", terminal.frame())
                 self.assertEqual(server.api("doctor")["agents"][other]["status"], "needs-input")
                 terminal.keys("\r\x0f")
                 terminal.wait(lambda: terminal.location(), ["work", server.window, server.main])

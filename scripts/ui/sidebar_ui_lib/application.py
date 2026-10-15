@@ -103,6 +103,7 @@ class View:
                 self.origin_session = navigation.get("origin_session", "")
                 self.snapshot["client"] = navigation["client"]
                 transferred = True
+        self.collapsed.difference_update(row["key"] for row in message["rows"] if row["kind"] == "session")
         self.collapsed.update(row["key"] for row in message["rows"] if row["kind"] == "window" and (message.get("collapse_panes", False) or row.get("compact")) and row["key"] not in self.expanded_windows)
         self.rows = visible_rows(message["rows"], self.collapsed)
         main = message.get("main", "")
@@ -173,10 +174,11 @@ class View:
         if row["kind"] == "pane":
             self.branch(row["parent"], expand)
             return
+        if row["kind"] != "window":
+            return
         if expand:
             self.collapsed.discard(key)
-            if row["kind"] == "window":
-                self.expanded_windows.add(key)
+            self.expanded_windows.add(key)
         else:
             self.collapsed.add(key)
             self.expanded_windows.discard(key)
@@ -322,14 +324,10 @@ class View:
         elif key == "m":
             index = next((i for i, row in enumerate(self.rows) if row["key"] == self.selected), 0)
             self.send("menu", row=max(0, index - self.scroll), key=self.selected)
-        elif key in {"h", curses.KEY_LEFT}:
-            row = self.row()
-            if row:
-                self.branch(row.get("parent", row["key"]), False)
+        elif key in {"h", curses.KEY_LEFT, "-"}:
+            self.branch(self.selected, False)
         elif key in {"l", curses.KEY_RIGHT, "+", "="}:
             self.branch(self.selected, True)
-        elif key == "-":
-            self.branch(self.selected, False)
 
     def mouse(self) -> None:
         try:

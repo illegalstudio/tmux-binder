@@ -101,15 +101,16 @@ Inside the sidebar:
 
 Names are entered inside the sidebar. Ctrl+u clears the prompt and Escape
 cancels it. Search and names accept Unicode. Use h/l or the left/right arrows
-to collapse and expand branches. Use / to search and n/N to move between matches.
+to collapse and expand window branches. Use / to search and n/N to move between matches.
 Use m or right click to open the context menu. Collapsed branches survive reloads.
 Context menus also provide splitting, zoom, marking and moving a pane to a new
 window. Session menus can detach their clients.
 
 Pane lists start collapsed, leaving sessions and windows visible. Select a window
-and press `+` or `=` to show its panes, or `-` to hide them. Pressing `-` on a pane
-returns to its window row. Explicit expansions survive navigation and reloads;
-new windows start collapsed. Collapsed windows retain their most urgent agent
+and press `l`, Right, `+` or `=` to show its panes, or `h`, Left or `-` to hide them.
+Collapsing from a pane returns to its window row. Session headings always remain
+expanded, keeping every window reachable with j/k. Explicit expansions survive
+navigation and reloads; new windows start collapsed. Collapsed windows retain their most urgent agent
 badge, and search opens matching panes automatically.
 
 The tree uses compact indentation and `▸` / `▾` branch indicators. Session
