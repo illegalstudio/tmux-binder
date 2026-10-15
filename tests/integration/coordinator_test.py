@@ -232,12 +232,72 @@ class Coordinator(unittest.TestCase):
         self.assertEqual(child.returncode, 0, err.decode())
         self.assertEqual(server.api("doctor")["agents"][server.main]["status"], "done")
 
+    def test_shared_agent_environment_routes_by_workspace_and_remembers_the_session(self):
+        server = self.server()
+        project = self.root / "shared-agent-project"
+        project.mkdir()
+        target = server.t("new-session", "-dP", "-F", "#{pane_id}", "-s", "other", "-c", str(project), "sleep 86400")
+        for pane in (server.main, target):
+            server.t("set-option", "-p", "-t", pane, "allow-set-title", "off")
+            server.t("select-pane", "-t", pane, "-T", "codex")
+        server.api("refresh")
+        env = {**server.env, "TMUX": f"{server.socket},{server.identity.server_pid},0", "TMUX_PANE": server.main}
+
+        def emit(event, **extra):
+            payload = {"hook_event_name": event, "session_id": "shared-session", "cwd": str(project), **extra}
+            result = subprocess.run([sys.executable, str(ROOT / "scripts/binder.py"), "hook", "codex", json.dumps(payload)], env=env, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+        emit("UserPromptSubmit")
+        states = server.api("doctor")["agents"]
+        self.assertIn(target, states)
+        self.assertNotIn(server.main, states)
+        self.assertEqual(states[target]["status"], "running")
+        emit("Stop", cwd=str(project / "nested"))
+        self.assertEqual(server.api("doctor")["agents"][target]["status"], "done")
+
     def test_bash_entrypoint_for_agent_events_remains_compatible(self):
         server = self.server()
         env = {**server.env, "TMUX": f"{server.socket},{server.identity.server_pid},0", "TMUX_PANE": server.main}
         result = subprocess.run(["bash", str(ROOT / "scripts/features/hooks/hook-claude.sh")], input='{"hook_event_name":"UserPromptSubmit"}', text=True, capture_output=True, env=env, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(server.api("doctor")["agents"][server.main]["status"], "running")
+
+    def test_installed_agent_handlers_deliver_statuses_on_their_tmux_server(self):
+        from binder.installer import DEFAULT_PATHS, install
+        from unittest.mock import patch
+
+        server = self.server()
+        configured = {key: str(server.directory / key) for key in DEFAULT_PATHS}
+        with patch.dict(os.environ, {**configured, "PLUGIN_DST": str(ROOT)}):
+            install(["claude", "codex", "cursor", "opencode", "pi", "grok"])
+        env = {**server.env, "TMUX": f"{server.socket},{server.identity.server_pid},0", "TMUX_PANE": server.main}
+        cases = {
+            "claude": [("UserPromptSubmit", {}, "running"), ("PermissionRequest", {}, "needs-input"), ("PostToolUse", {}, "running"), ("Stop", {}, "done")],
+            "codex": [("UserPromptSubmit", {}, "running"), ("PermissionRequest", {}, "needs-input"), ("PostToolUse", {}, "running"), ("SubagentStart", {"agent_id": "child"}, "subagent-running"), ("SubagentStop", {"agent_id": "child"}, "running"), ("Stop", {}, "done")],
+            "cursor": [("beforeSubmitPrompt", {}, "running"), ("postToolUseFailure", {"failure_type": "permission_denied"}, "needs-input"), ("postToolUse", {}, "running"), ("stop", {"status": "completed"}, "done")],
+            "opencode": [("session.status", {"status": "running"}, "running"), ("permission.asked", {}, "needs-input"), ("session.idle", {}, "done")],
+            "pi": [("agent_start", {}, "running"), ("agent_end", {}, "done")],
+            "grok": [("UserPromptSubmit", {}, "running"), ("PermissionDenied", {}, "needs-input"), ("PostToolUse", {}, "running"), ("Stop", {}, "done"), ("Notification", {"notificationType": "idle_prompt"}, "done"), ("StopFailure", {}, "error"), ("StopCancelled", {}, "idle")],
+        }
+        for app, events in cases.items():
+            server.t("set-option", "-p", "-t", server.main, "allow-set-title", "off")
+            server.t("select-pane", "-t", server.main, "-T", app)
+            for event, extra, expected in events:
+                with self.subTest(app=app, event=event):
+                    if app in {"claude", "codex", "cursor", "grok"}:
+                        key = {"claude": "CLAUDE_SETTINGS", "codex": "CODEX_HOOKS", "cursor": "CURSOR_HOOKS", "grok": "GROK_HOOKS"}[app]
+                        entries = json.loads(Path(configured[key]).read_text())["hooks"][event]
+                        command = entries[0]["command"] if app == "cursor" else entries[0]["hooks"][0]["command"]
+                    else:
+                        command = "bash " + shlex.quote(str(ROOT / f"scripts/features/hooks/hook-{app}.sh"))
+                    payload = {"hook_event_name": event, "event": event, "session_id": app, **extra}
+                    result = subprocess.run(shlex.split(command), input=json.dumps(payload), text=True, capture_output=True, env=env, timeout=5)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stderr, "")
+                    server.wait(lambda: server.api("doctor")["agents"].get(server.main, {}).get("status"), expected)
+                    if app == "cursor":
+                        self.assertEqual(json.loads(result.stdout), {"continue": True} if event == "beforeSubmitPrompt" else {})
 
     def test_view_failure_recovers_and_content_pid_is_unchanged(self):
         server = self.server()

@@ -13,18 +13,18 @@ real_tmux_run_shell_capture bash "$REPO_ROOT/scripts/features/sidebar/toggle-sid
 sidebar="$(real_tmux_wait_for_sidebar_pane "$window")"
 real_tmux_wait_for_capture "$sidebar" '▸ editor' >/dev/null
 real_tmux_run_shell_capture bash "$REPO_ROOT/scripts/features/state/update-pane-state.sh" --pane "$main" --app claude --status needs-input >/dev/null
-real_tmux_wait_for_capture "$sidebar" '❓' >/dev/null
+real_tmux_wait_for_capture "$sidebar" '?' >/dev/null
 real_tmux select-pane -t "$sidebar"
 real_tmux select-pane -t "$main"
 for _attempt in $(seq 1 100); do
   frame="$(real_tmux capture-pane -pt "$sidebar")"
-  case "$frame" in *'❓'*) sleep .05 ;; *) break ;; esac
+  case "$frame" in *'?'*) sleep .05 ;; *) break ;; esac
 done
-case "$frame" in *'❓'*) fail 'focusing the pane did not acknowledge input' ;; esac
+case "$frame" in *'?'*) fail 'focusing the pane did not acknowledge input' ;; esac
 real_tmux_run_shell_capture bash "$REPO_ROOT/scripts/features/state/update-pane-state.sh" --pane "$main" --app claude --status done >/dev/null
-real_tmux_wait_for_capture "$sidebar" '✅' >/dev/null
+real_tmux_wait_for_capture "$sidebar" '✓' >/dev/null
 real_tmux select-pane -t "$sidebar"
 real_tmux select-pane -t "$main"
-real_tmux_wait_for_capture "$sidebar" '✅' >/dev/null
+real_tmux_wait_for_capture "$sidebar" '✓' >/dev/null
 kill "$REAL_TMUX_CLIENT_PID" 2>/dev/null || true
 printf 'Verified rendered agent badges, focus acknowledgement and retained completion state.\n'

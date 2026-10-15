@@ -7,10 +7,36 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .icons import APP_ALIASES
+from .icons import AGENT_APPS, APP_ALIASES
 
 STATUSES = {"idle", "running", "subagent-running", "needs-input", "done", "error"}
 RANK = {"idle": 1, "running": 2, "subagent-running": 2, "done": 3, "needs-input": 4, "error": 4}
+
+
+def resolve_agent_pane(panes: dict[str, dict], states: dict[str, dict], event: dict, pane: str, roots: list[str], explicit: bool = False) -> str:
+    content = {pid: item for pid, item in panes.items() if not item["sidebar"]}
+    if explicit and pane in content:
+        return pane
+    app = event.get("app", "")
+    candidates = {pid: item for pid, item in content.items() if live_agent_app(item["pane_current_command"], item["pane_title"], states.get(pid, {})) == app}
+    session_id = event.get("session_id", "")
+    bound = [pid for pid in candidates if session_id and states.get(pid, {}).get("session_id") == session_id and states[pid].get("app") == app]
+    if len(bound) == 1:
+        return bound[0]
+    roots = [os.path.realpath(root) for root in roots if root and os.path.isabs(root)]
+    if not roots:
+        return pane if pane in content else ""
+    scores = {}
+    for pid, item in candidates.items():
+        path = os.path.realpath(item["pane_current_path"])
+        related = [(path == root, min(len(path), len(root))) for root in roots if path == root or path.startswith(root.rstrip("/") + "/") or root.startswith(path.rstrip("/") + "/")]
+        if related:
+            scores[pid] = max(related)
+    if not scores:
+        return ""
+    best = max(scores.values())
+    matches = [pid for pid, score in scores.items() if score == best]
+    return matches[0] if len(matches) == 1 else ""
 
 
 def normalize(app: str, data: dict, event: str = "") -> dict:
@@ -23,14 +49,18 @@ def normalize(app: str, data: dict, event: str = "") -> dict:
     if app == "claude":
         status, subagent_event, message = parse_claude(payload)
     else:
-        parser = {"codex": parse_codex, "cursor": parse_cursor, "opencode": parse_opencode, "pi": parse_pi, "kiro": parse_kiro}[app]
+        parser = {"codex": parse_codex, "cursor": parse_cursor, "opencode": parse_opencode, "pi": parse_pi, "kiro": parse_kiro, "grok": parse_grok}[app]
         status, message = parser(event, payload)
         subagent_event = ""
+    native_event = re.sub(r"[^a-z]", "", str(payload.get("hook_event_name") or event).lower())
+    if app == "codex" and native_event in {"subagentstart", "subagentstop"}:
+        subagent_event = "start" if native_event == "subagentstart" else "stop"
     return {
         "app": app, "status": status, "message": message, "subagent_event": subagent_event,
-        "event": str(payload.get("hook_event_name") or payload.get("event") or payload.get("type") or event),
-        "session_id": str(payload.get("session_id") or payload.get("conversation_id") or ""),
-        "run_id": str(payload.get("turn_id") or payload.get("run_id") or ""),
+        "event": str(payload.get("hook_event_name") or payload.get("hookEventName") or payload.get("event") or payload.get("type") or event),
+        "session_id": str(payload.get("session_id") or payload.get("conversation_id") or payload.get("sessionId") or ""),
+        "run_id": str(payload.get("turn_id") or payload.get("run_id") or payload.get("promptId") or ""),
+        "notification_type": str(payload.get("notification_type") or payload.get("notificationType") or ""),
         "subagent_id": str(payload.get("agent_id") or payload.get("subagent_id") or ""),
         "delegated": app == "codex" and payload.get("permission_mode") in {"delegate", "dangerouslySkipPermissions"},
     }
@@ -52,9 +82,11 @@ class AgentStore:
             self.delegated.add(key)
         normalized = re.sub(r"[^a-z]", "", event.get("event", "").lower())
         explicit_subagent = normalized in {"subagentstart", "subagentstop"}
-        if (explicit_subagent and event.get("app") != "claude") or ((event.get("delegated") or key in self.delegated) and status in {"done", "needs-input"}):
+        if (explicit_subagent and event.get("app") not in {"claude", "codex"}) or ((event.get("delegated") or key in self.delegated) and status in {"done", "needs-input"}):
             return False
         previous = self.panes.get(pane, {})
+        if event.get("app") == "grok" and event.get("notification_type") == "idle_prompt" and previous.get("status") in {"done", "error"}:
+            return False
         stamp = int(event.get("updated_at") or time.time_ns())
         if stamp <= 0:
             raise ValueError("Agent timestamp must be positive")
@@ -66,6 +98,8 @@ class AgentStore:
             return False
         run = event.get("run_id", "")
         prior_run = previous.get("run_id", "")
+        if event.get("app") == "grok" and run and prior_run and run != prior_run and normalized != "userpromptsubmit":
+            return False
         if run and prior_run and run != prior_run and status not in {"running", "idle"}:
             return False
         count = int(previous.get("subagent_count", 0))
@@ -83,6 +117,8 @@ class AgentStore:
             ids.discard(agent_id)
             if count:
                 status = "subagent-running"
+        elif status == "running" and count and normalized in {"pretooluse", "posttooluse"}:
+            status = "subagent-running"
         elif status in {"idle", "done", "running"}:
             count = 0
             ids.clear()
@@ -90,6 +126,7 @@ class AgentStore:
             **metadata, "pane_id": pane, "app": event.get("app", ""), "status": status,
             "message": str(event.get("message", "")), "updated_at": stamp,
             "subagent_count": count, "subagent_ids": sorted(ids), "run_id": run or prior_run,
+            "session_id": event.get("session_id") or previous.get("session_id", ""),
         }
         return True
 
@@ -178,7 +215,7 @@ def parse_claude(payload: str) -> tuple[str, str, str]:
 
     if event in ("SessionStart", "SessionEnd"):
         status = "idle"
-    elif event == "UserPromptSubmit":
+    elif event in ("UserPromptSubmit", "PostToolUse"):
         status = "running"
     elif event == "SubagentStart":
         status = "running"
@@ -200,6 +237,18 @@ def parse_claude(payload: str) -> tuple[str, str, str]:
     return status, subagent_event, message
 
 
+def parse_grok(event: str, payload: str | dict) -> tuple[str, str]:
+    data = load_payload(payload)
+    if data.get("subagentType") or data.get("subagent_type"):
+        return "", ""
+    name = re.sub(r"[^a-z]", "", str(data.get("hook_event_name") or data.get("hookEventName") or event).lower())
+    statuses = {"sessionstart": "idle", "sessionend": "idle", "userpromptsubmit": "running", "posttooluse": "running", "posttoolusefailure": "error", "permissiondenied": "needs-input", "stop": "done", "stopfailure": "error", "stopcancelled": "idle"}
+    status = statuses.get(name, "")
+    if name == "notification":
+        status = {"permission_prompt": "needs-input", "idle_prompt": "idle", "task_complete": "done"}.get(str(data.get("notificationType") or data.get("notification_type") or ""), "")
+    return status, str(data.get("message") or data.get("errorDetails") or "")
+
+
 def parse_codex(event: str, payload: str) -> tuple[str, str]:
     data = load_payload(payload)
     raw_event = str(
@@ -212,6 +261,7 @@ def parse_codex(event: str, payload: str) -> tuple[str, str]:
     notif_type = str(data.get("notification_type") or "").strip().lower()
     status_hint = str(data.get("status") or data.get("state") or "").strip().lower().replace("_", "-")
     message = str(data.get("summary") or data.get("transcript_summary") or data.get("message") or "").strip()
+    native = raw_event.replace("-", "")
 
     done_events = {
         "agent-turn-complete",
@@ -246,7 +296,11 @@ def parse_codex(event: str, payload: str) -> tuple[str, str]:
         "turn-started",
     }
 
-    if notif_type == "permission_prompt":
+    if native in {"sessionstart", "sessionend", "interrupt"}:
+        status = "idle"
+    elif native in {"userpromptsubmit", "pretooluse", "posttooluse", "subagentstart", "subagentstop"}:
+        status = "running"
+    elif notif_type == "permission_prompt":
         status = "needs-input"
     elif raw_event in done_events or status_hint in done_statuses:
         status = "done"
@@ -476,7 +530,7 @@ def state_agent_app(command: str, title: str, state: dict | None) -> str:
     status = str((state or {}).get("status", "")).strip().lower()
     state_command = str((state or {}).get("pane_current_command", ""))
     state_title = str((state or {}).get("pane_title", ""))
-    if app not in ("claude", "codex", "opencode", "cursor", "pi", "kiro"):
+    if app not in AGENT_APPS:
         return ""
     if app == "cursor":
         if status and status != "idle":
@@ -524,6 +578,8 @@ def claude_title_status(title: str) -> str:
 
 
 def live_agent_app(command: str, title: str, state: dict | None) -> str:
+    if normalize_token(command) in {"grok", "grok-native", "grok-cli"} or re.search(r"\bgrok\b", title, re.IGNORECASE):
+        return "grok"
     if looks_like_codex(command) or looks_like_codex(title):
         return "codex"
     if looks_like_opencode(command) or looks_like_opencode(title):

@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from binder.config import visuals
-from binder.model import Model, minimum_layout_width, project_rows
+from binder.model import Model, minimum_layout_width, project_rows, window_badges
 from binder.tmux import SCHEMAS
 
 
@@ -47,7 +47,7 @@ class TreeProjection(unittest.TestCase):
 
     def test_badges_are_projected_from_shared_agent_state(self):
         rows = self.project({"%0": {"app": "claude", "status": "needs-input"}})
-        self.assertTrue(any("claude ❓" in row["text"] for row in rows))
+        self.assertTrue(any("claude ?" in row["text"] for row in rows))
 
     def test_filter_preserves_actual_content_count(self):
         rows = self.project(filter="claude", compact_single_panes="on")
@@ -71,12 +71,60 @@ class TreeProjection(unittest.TestCase):
         self.assertTrue(logs["compact"])
         self.assertTrue(any(row["kind"] == "pane" and row["parent"] == logs["key"] for row in rows))
 
-    def test_collapsed_windows_keep_the_most_urgent_badge(self):
+    def test_window_summaries_match_when_expanded_or_collapsed(self):
         self.model.panes["%1"].update(pane_current_command="codex", pane_title="codex")
         rows = self.project({"%0": {"app": "claude", "status": "running"}, "%1": {"app": "codex", "status": "needs-input"}})
         editor = next(row for row in rows if row["key"] == "$0/@0")
-        self.assertTrue(editor["collapsed_text"].endswith("❓"))
-        self.assertNotIn("❓", editor["text"])
+        self.assertTrue(editor["text"].endswith("? ●"))
+        self.assertEqual(editor["collapsed_text"], editor["text"])
+        self.assertEqual(editor["collapsed_badge"], editor["badge"])
+
+    def test_window_summaries_count_panes_and_exclude_the_sidebar(self):
+        self.model.panes["%1"].update(pane_current_command="codex", pane_title="codex")
+        self.model.panes["%3"] = {**self.model.panes["%0"], "pane_id": "%3"}
+        states = {"%0": {"app": "claude", "status": "running"}, "%1": {"app": "codex", "status": "needs-input"}, "%3": {"app": "claude", "status": "running"}, "%9": {"app": "claude", "status": "error"}}
+        editor = next(row for row in self.project(states) if row["key"] == "$0/@0")
+        self.assertEqual(editor["badge"], "?1 ●2")
+        self.assertEqual([(part["status"], part["count"]) for part in editor["badges"]], [("needs-input", 1), ("running", 2)])
+
+    def test_window_summaries_include_filtered_panes_without_double_counting_links(self):
+        self.model.panes["%1"].update(pane_current_command="codex", pane_title="codex")
+        self.model.windows["@0"]["links"].append("$1")
+        rows = self.project({"%0": {"app": "claude", "status": "running"}, "%1": {"app": "codex", "status": "needs-input"}}, filter="claude")
+        windows = [row for row in rows if row["kind"] == "window"]
+        self.assertEqual(len(windows), 2)
+        self.assertEqual([row["badge"] for row in windows], ["? ●", "? ●"])
+        self.assertEqual([row["pane_id"] for row in rows if row["kind"] == "pane"], ["%0", "%0"])
+
+    def test_hidden_panes_and_custom_badges_preserve_window_activity(self):
+        self.model.panes["%1"].update(pane_current_command="codex", pane_title="codex")
+        self.badges.update(running="run", error="")
+        rows = self.project({"%0": {"app": "claude", "status": "running"}, "%1": {"app": "codex", "status": "error"}}, hide_panes="on")
+        editor = next(row for row in rows if row["key"] == "$0/@0")
+        self.assertEqual(editor["badge"], "run")
+        self.assertEqual([row["pane_id"] for row in rows if row["kind"] == "pane"], ["%0"])
+
+    def test_compact_window_and_its_pane_both_keep_status(self):
+        self.model.panes["%2"].update(pane_current_command="claude", pane_title="claude")
+        rows = self.project({"%2": {"app": "claude", "status": "done"}}, compact_single_panes="on")
+        window = next(row for row in rows if row["key"] == "$1/@1")
+        pane = next(row for row in rows if row["key"] == "$1/@1/%2")
+        self.assertTrue(window["compact"])
+        self.assertEqual((window["badge"], pane["badge"]), ("✓", "✓"))
+
+    def test_summary_priority_and_subagent_counts_are_per_pane(self):
+        statuses = {"%0": "done", "%1": "running", "%2": "subagent-running", "%3": "error", "%4": "needs-input"}
+        summary = window_badges([{"pane_id": key} for key in statuses], statuses, self.badges)
+        self.assertEqual(" ".join(part["text"] for part in summary), "? ! ↳ ● ✓")
+        self.assertEqual([part["count"] for part in summary], [1] * 5)
+        delegated = next(row for row in self.project({"%0": {"app": "claude", "status": "subagent-running", "subagent_count": 20}}) if row["key"] == "$0/@0")
+        self.assertEqual(delegated["badge"], "↳")
+
+    def test_idle_and_completed_status_transitions_clear_stale_counts(self):
+        for status, expected in (("running", "●"), ("done", "✓"), ("idle", "")):
+            with self.subTest(status=status):
+                window = next(row for row in self.project({"%0": {"app": "claude", "status": status}}) if row["key"] == "$0/@0")
+                self.assertEqual(window["badge"], expected)
 
     def test_session_order_and_unknown_entries(self):
         rows = self.project(session_order="missing,ops,work")

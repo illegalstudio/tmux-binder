@@ -4,10 +4,61 @@ import json
 import unittest
 from pathlib import Path
 
-from binder.agents import AgentStore, effective_status, live_agent_app, normalize, terminal_status
+from binder.agents import AgentStore, effective_status, live_agent_app, normalize, resolve_agent_pane, terminal_status
 
 
 class AgentEvents(unittest.TestCase):
+    def test_grok_native_names_and_camelcase_lifecycle(self):
+        for command, title in (("grok", ""), ("grok-native", ""), ("node", "Grok Build")):
+            self.assertEqual(live_agent_app(command, title, {}), "grok")
+        store = AgentStore()
+        for event, expected in (("session_start", "idle"), ("user_prompt_submit", "running"), ("post_tool_use", "running"), ("permission_denied", "needs-input"), ("post_tool_use_failure", "error"), ("stop", "done"), ("stop_cancelled", "idle")):
+            normalized = normalize("grok", {"hookEventName": event, "sessionId": "session", "promptId": "turn"})
+            store.update("%1", normalized, {})
+            self.assertEqual(store.panes["%1"]["status"], expected)
+            self.assertEqual(store.panes["%1"]["session_id"], "session")
+
+    def test_grok_idle_notifications_preserve_completion_and_ignore_child_stops(self):
+        store = AgentStore()
+        store.update("%1", normalize("grok", {"hookEventName": "user_prompt_submit", "promptId": "new"}), {})
+        self.assertFalse(store.update("%1", normalize("grok", {"hookEventName": "stop_cancelled", "promptId": "old"}), {}))
+        self.assertFalse(store.update("%1", normalize("grok", {"hookEventName": "stop", "subagentType": "explore"}), {}))
+        self.assertEqual(store.panes["%1"]["status"], "running")
+        store.update("%1", normalize("grok", {"hookEventName": "stop", "promptId": "new"}), {})
+        store.update("%1", normalize("grok", {"hookEventName": "notification", "notificationType": "idle_prompt"}), {})
+        self.assertEqual(store.panes["%1"]["status"], "done")
+
+    def test_workspace_routing_rejects_stale_environment_and_ignores_non_agent_panes(self):
+        panes = {
+            "%1": {"sidebar": False, "pane_current_command": "codex", "pane_title": "", "pane_current_path": "/projects/one"},
+            "%2": {"sidebar": False, "pane_current_command": "codex", "pane_title": "", "pane_current_path": "/projects/two"},
+            "%3": {"sidebar": False, "pane_current_command": "bash", "pane_title": "", "pane_current_path": "/projects/two"},
+            "%4": {"sidebar": True, "pane_current_command": "python3", "pane_title": "", "pane_current_path": "/projects/two"},
+        }
+        self.assertEqual(resolve_agent_pane(panes, {}, {"app": "codex"}, "%1", ["/projects/two"]), "%2")
+        self.assertEqual(resolve_agent_pane(panes, {}, {"app": "codex"}, "%1", ["/unrelated"]), "")
+
+    def test_workspace_routing_does_not_guess_between_equal_candidates(self):
+        panes = {pid: {"sidebar": False, "pane_current_command": "codex", "pane_title": "", "pane_current_path": "/projects/shared"} for pid in ("%1", "%2")}
+        event = {"app": "codex", "session_id": "session"}
+        self.assertEqual(resolve_agent_pane(panes, {}, event, "%1", ["/projects/shared"]), "")
+        states = {"%2": {"app": "codex", "session_id": "session"}}
+        self.assertEqual(resolve_agent_pane(panes, states, event, "%1", ["/projects/shared/nested"]), "%2")
+        self.assertEqual(resolve_agent_pane(panes, {}, event, "%1", ["/elsewhere"], explicit=True), "%1")
+
+    def test_agent_session_binding_survives_events_without_a_session_id(self):
+        store = AgentStore()
+        store.update("%1", normalize("codex", {"hook_event_name": "UserPromptSubmit", "session_id": "session"}), {})
+        store.update("%1", normalize("codex", {"hook_event_name": "PostToolUse"}), {})
+        self.assertEqual(store.panes["%1"]["session_id"], "session")
+
+    def test_codex_native_lifecycle_and_subagents(self):
+        store = AgentStore()
+        for event, expected in (("SessionStart", "idle"), ("UserPromptSubmit", "running"), ("SubagentStart", "subagent-running"), ("PostToolUse", "subagent-running"), ("PermissionRequest", "needs-input"), ("PostToolUse", "subagent-running"), ("SubagentStop", "running"), ("Stop", "done"), ("Interrupt", "idle"), ("SessionEnd", "idle")):
+            with self.subTest(event=event):
+                store.update("%1", normalize("codex", {"hook_event_name": event, "session_id": "parent", "turn_id": "run", "agent_id": "child", "permission_mode": "bypassPermissions"}), {})
+                self.assertEqual(store.panes["%1"]["status"], expected)
+
     def test_existing_agent_event_contracts(self):
         fixtures = json.loads((Path(__file__).parents[1] / "fixtures/agent_events.json").read_text())
         self.assertGreaterEqual(len(fixtures), 30)

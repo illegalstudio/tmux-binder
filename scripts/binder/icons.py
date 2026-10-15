@@ -1,27 +1,22 @@
 from __future__ import annotations
 
+AGENT_APPS = ("claude", "codex", "cursor", "opencode", "pi", "kiro", "grok")
 DEFAULT_BADGES: dict[str, str] = {
-    "running": "⏳",
-    "subagent-running": "↳⏳",
-    "needs-input": "❓",
-    "done": "✅",
-    "error": "❌",
-}
-NERD_FONT_BADGES: dict[str, str] = {
-    "running": "\uf252",
-    "subagent-running": "↳\uf252",
-    "needs-input": "\uf059",
-    "done": "\uf05d",
-    "error": "\uf46e",
+    "running": "●",
+    "subagent-running": "↳",
+    "needs-input": "?",
+    "done": "✓",
+    "error": "!",
 }
 
 ASCII_ICONS: dict[str, str] = {
-    "claude": "C",
-    "codex": "X",
-    "opencode": "O",
-    "cursor": "U",
-    "pi": "π",
-    "kiro": "K",
+    "grok": "",
+    "claude": "",
+    "codex": "",
+    "opencode": "",
+    "cursor": "",
+    "pi": "",
+    "kiro": "",
     "shell": "$",
     "node": "N",
     "python": "P",
@@ -42,12 +37,13 @@ ASCII_ICONS: dict[str, str] = {
     "unknown": "?",
 }
 UNICODE_ICONS: dict[str, str] = {
-    "claude": "◎",
-    "codex": "⌘",
-    "opencode": "◌",
-    "cursor": "▣",
-    "pi": "π",
-    "kiro": "◆",
+    "grok": "",
+    "claude": "",
+    "codex": "",
+    "opencode": "",
+    "cursor": "",
+    "pi": "",
+    "kiro": "",
     "shell": "›",
     "node": "⬢",
     "python": "¶",
@@ -68,12 +64,13 @@ UNICODE_ICONS: dict[str, str] = {
     "unknown": "·",
 }
 NERD_FONT_ICONS: dict[str, str] = {
-    "claude": "\U000f0d70",
-    "codex": "\U000f0d70",
-    "opencode": "\U000f0d70",
-    "cursor": "\U000f0d70",
-    "pi": "\U000f0d70",
-    "kiro": "\U000f0d70",
+    "grok": "",
+    "claude": "",
+    "codex": "",
+    "opencode": "",
+    "cursor": "",
+    "pi": "",
+    "kiro": "",
     "shell": "\U000f016c",
     "node": "\ue719",
     "python": "\ue73c",
@@ -99,6 +96,9 @@ ICON_THEMES: dict[str, dict[str, str]] = {
     "unicode": UNICODE_ICONS,
 }
 APP_ALIASES: dict[str, str] = {
+    "grok": "grok",
+    "grok-native": "grok",
+    "grok-cli": "grok",
     "ash": "shell",
     "bash": "shell",
     "dash": "shell",

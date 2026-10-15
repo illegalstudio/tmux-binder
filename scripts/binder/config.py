@@ -6,12 +6,12 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from .icons import DEFAULT_BADGES, FONT_FILE_SUFFIXES, ICON_THEMES, NERD_FONT_BADGES
+from .icons import DEFAULT_BADGES, FONT_FILE_SUFFIXES, ICON_THEMES
 
 SHORTCUTS = {
     "add_window": "aw", "add_session": "as", "go_top": "gg", "go_bottom": "G",
-    "jump_back": "C-o", "jump_forward": "C-i", "rename_session": "rs",
-    "rename_window": "rw", "close_pane": "x", "toggle_filter": "f",
+    "jump_back": "C-o", "jump_forward": "C-i", "rename_session": "R",
+    "rename_window": "r", "close_pane": "x", "toggle_filter": "f",
 }
 
 
@@ -78,6 +78,5 @@ def visuals(options: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
     if theme not in ICON_THEMES:
         raise ValueError(f"Unknown icon theme: {theme}")
     icons = {app: option(options, "icon_" + app, icon) for app, icon in ICON_THEMES[theme].items()}
-    defaults = NERD_FONT_BADGES if theme == "nerdfont" else DEFAULT_BADGES
-    badges = {status: option(options, "badge_" + status.replace("-", "_"), badge) for status, badge in defaults.items()}
+    badges = {status: option(options, "badge_" + status.replace("-", "_"), badge) for status, badge in DEFAULT_BADGES.items()}
     return icons, badges

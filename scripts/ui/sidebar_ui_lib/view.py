@@ -58,6 +58,47 @@ def navigable(rows: list[dict], collapsed: set[str], include_headers: bool = Fal
     return [row for row in rows if row["kind"] != "session" and (include_headers or "pane_id" in row or row["key"] in collapsed)]
 
 
+def navigate(rows: list[dict], state: dict, action: str) -> dict:
+    collapsed = set(state.get("collapsed", []))
+    expanded = set(state.get("expanded_windows", []))
+    collapsed.difference_update(row["key"] for row in rows if row["kind"] == "session")
+    collapsed.update(row["key"] for row in rows if row["kind"] == "window" and (state.get("collapse_panes") or row.get("compact")) and row["key"] not in expanded)
+    visible = visible_rows(rows, collapsed)
+    selected = state.get("selected", "")
+    if action in {"top", "bottom"}:
+        targets = navigable(visible, collapsed, True)
+        if targets:
+            selected = targets[0 if action == "top" else -1]["key"]
+            jumps = list(state.get("jumps", []))[:int(state.get("jump_index", -1)) + 1]
+            entry = ["sidebar", selected]
+            if not jumps or list(jumps[-1]) != entry:
+                jumps.append(entry)
+            state = {**state, "jumps": jumps, "jump_index": len(jumps) - 1}
+    elif action in {"up", "down"}:
+        position = next((index for index, row in enumerate(visible) if row["key"] == selected), -1)
+        candidates = visible[position + 1:] if action == "down" else visible[:position][::-1]
+        target = next((row for row in candidates if row["kind"] != "session"), None)
+        if target:
+            selected = target["key"]
+    elif action in {"expand", "collapse"}:
+        row = next((row for row in rows if row["key"] == selected), {})
+        if row.get("kind") == "pane":
+            row = next((parent for parent in rows if parent["key"] == row["parent"]), {})
+        if row.get("kind") == "window":
+            key = row["key"]
+            if action == "expand":
+                collapsed.discard(key)
+                expanded.add(key)
+            else:
+                collapsed.add(key)
+                expanded.discard(key)
+                if selected.startswith(key + "/"):
+                    selected = key
+    else:
+        raise ValueError("Unknown navigation action")
+    return {**state, "selected": selected, "collapsed": sorted(collapsed), "expanded_windows": sorted(expanded)}
+
+
 def selection_for(rows: list[dict], key: str, main: str, all_rows: list[dict] | None = None) -> str:
     if any(row["key"] == key for row in rows):
         return key

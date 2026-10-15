@@ -1,341 +1,386 @@
-# tmux-binder
+<p align="center">
+  <sub>Originally forked from <a href="https://github.com/sandudorogan/tmux-pane-tree">tmux-pane-tree</a> by Sandu Dorogan.</sub>
+</p>
 
-[![Tests](https://github.com/illegalstudio/tmux-binder/actions/workflows/test.yml/badge.svg)](https://github.com/illegalstudio/tmux-binder/actions/workflows/test.yml)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.png">
+    <img src="assets/logo-transparent.png" alt="tmux-binder logo" width="130" height="130">
+  </picture>
+</p>
 
-An independently maintained fork of
-[tmux-pane-tree](https://github.com/sandudorogan/tmux-pane-tree).
+<h1 align="center">tmux-binder</h1>
 
-A persistent session tree on the left of every tmux window, with live status
-badges for `claude`, `codex`, `cursor`, `opencode`, `pi`, and `kiro`.
+<p align="center">
+  <em>One sidebar. Every session.</em>
+</p>
 
+<p align="center">
+  <a href="https://github.com/illegalstudio/tmux-binder/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/illegalstudio/tmux-binder/test.yml?branch=main&amp;style=flat-square&amp;logo=github&amp;logoColor=white&amp;label=tests&amp;color=34D399" alt="Tests"></a>
+  <a href="#installation"><img src="https://img.shields.io/badge/tmux-3.4%2B-34D399?style=flat-square&amp;logo=tmux&amp;logoColor=white&amp;color=34D399" alt="tmux 3.4 or newer"></a>
+  <a href="#installation"><img src="https://img.shields.io/badge/Python-3.10%2B-34D399?style=flat-square&amp;logo=python&amp;logoColor=white&amp;color=34D399" alt="Python 3.10 or newer"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/illegalstudio/tmux-binder?style=flat-square&amp;color=34D399" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <strong>Live navigation &middot; Global visibility &middot; Agent activity</strong>
+</p>
+
+<p align="center">
+  Keep your sessions, windows and panes within reach. Browse live previews,
+  carry one shared sidebar across tmux, and see which coding agents are working,
+  waiting for you or finished.
+</p>
+
+<p align="center">
+  <a href="https://illegal.studio/en/products/tmux-binder"><strong>Official website</strong></a>
+</p>
+
+---
+
+[Installation](#installation) · [Navigation](#navigation) · [Agent activity](#agent-activity) · [Configuration](#configuration) · [Development](#development)
+
+## Your workspace at a glance
+
+```text
+  work
+   ▸ api                         ?1 ●2
+▶  ▸ worker                          ●
+  ops
+   ▾ deploy                          ✓
+     codex                           ✓
 ```
-  ┌─ Sidebar ──────────────┬────────────────────────────────┐
-  │  work                  │$ claude                        │
-  │   ▾ api                │                                │
-  │     C claude         ❓│Working on your request...      │
-  │     $ bash             │                                │
-  │▶  ▸ jobs             ⏳│                                │
-  │  ops                   │                                │
-  │   ▸ logs               │                                │
-  │                        │                                │
-  │                        │                                │
-  │= expand  / search      │                                │
-  └────────────────────────┴────────────────────────────────┘
-```
 
-![tmux-pane-tree showcase](images/showcase.gif)
+- **Preview as you browse.** Move through windows and panes to see their contents immediately. Keep navigating in the sidebar, then press Enter to work in the selected pane.
+- **Open once, use everywhere.** Visibility is shared across existing and future sessions and windows, including detached sessions. Closing one sidebar closes them all.
+- **See activity without expanding.** Window summaries show agent activity even with their pane lists collapsed. Expand a window to see each pane's state.
+- **Keep your layout.** The sidebar remembers its preferred width across navigation, reopening and clients with different terminal sizes. Content processes keep running when the sidebar reloads.
+- **Stay inside tmux.** Search, Unicode names, keyboard shortcuts and native context menus fit into your terminal workflow. Selection and accents follow your tmux theme.
 
-- **Tree view** of sessions, windows, and panes. `Enter` jumps to a pane.
-- **Agent badges** update live from agent hooks.
-- **Global visibility**: open or close once for every window and session.
-- **One coordinator per server**: native events and shared state, with sleeping UI processes at idle.
-- **Unicode search and prompts**, collapsible branches, and native context menus.
-- **Manage sessions** from the sidebar: add, rename, close.
+## Installation
 
-| Badge | Status           | Meaning                          |
-| :---: | ---------------- | -------------------------------- |
-| `⏳`  | running          | Agent is working                 |
-| `↳⏳` | subagent-running | Agent is delegating to subagents |
-| `❓`  | needs-input      | Waiting for permission or input  |
-| `✅`  | done             | Finished                         |
-| `❌`  | error            | Something went wrong             |
+Requires **tmux 3.4+**, **Python 3.10+ with curses**, and **Bash**. The runtime uses the Python standard library, with no pip packages to install.
 
-`needs-input` clears when you focus the pane. `done` stays until the next run.
+### With TPM
 
-## Install
-
-Requires tmux 3.4+, Python 3.10+ with curses, and Bash. No pip packages are required.
-
-**TPM**
+Add this alongside your plugins in `~/.tmux.conf`, before the TPM initialization line:
 
 ```tmux
 set -g @plugin 'illegalstudio/tmux-binder'
-set -g @tmux_pane_tree_install_agent_hooks 1   # optional: wire agent hooks on load
 ```
 
-Reload tmux, then `prefix + I`.
+Reload your tmux configuration, then press **prefix + I** to install. Press **prefix + t** to open the sidebar.
 
-**Manual**
+### Manual installation
 
 ```bash
-git clone https://github.com/illegalstudio/tmux-binder ~/.config/tmux/plugins/tmux-binder
+git clone https://github.com/illegalstudio/tmux-binder \
+  ~/.config/tmux/plugins/tmux-binder
 ```
+
+Add this to your tmux configuration, then reload it:
 
 ```tmux
 source-file ~/.config/tmux/plugins/tmux-binder/tmux-pane-tree.conf
 ```
 
-To patch Claude Code, Codex, Cursor, OpenCode, Pi, and Kiro hook config after a manual install:
+The `tmux-pane-tree.conf` filename and `@tmux_pane_tree_*` option names remain compatible with the original plugin. Legacy `@tmux_sidebar_*` options and shell entrypoints are also supported.
 
-```bash
-bash ~/.config/tmux/plugins/tmux-binder/scripts/features/hooks/install-agent-hooks.sh
+**Agent hooks are optional and disabled by default.** Installing the sidebar does not modify agent settings. Follow [Connect your agents](#connect-your-agents) to enable activity indicators.
+
+## Navigation
+
+| Key | Action |
+| --- | --- |
+| **prefix + t** | Open or close the sidebar everywhere |
+| **prefix + T** | Focus the sidebar or return to the content pane |
+| `j` / `k`, Up / Down | Move selection and preview the selected content |
+| `gg` / `G` | Jump to the first or last selectable item |
+| `Enter` | Focus the selected content pane |
+| `Ctrl+l` | Return to the content pane |
+| `l`, Right, `+`, `=` | Expand the selected window's panes |
+| `h`, Left, `-` | Collapse the selected window's panes |
+| `/` | Search sessions, windows and panes |
+| `n` / `N` | Move to the next or previous search match |
+| `Ctrl+o` / `Ctrl+i` | Go back or forward through the jump list |
+| `aw` / `as` | Add a window or session |
+| `r` / `R` | Rename the selected window or its session |
+| `x` | Close the selected item, with confirmation for headers |
+| `f` | Toggle the configured pane filter |
+| `p` | Toggle pane rows |
+| `m` / right click | Open the native context menu |
+| `q` | Close the sidebar everywhere |
+
+Window branches start collapsed. Session headings stay visible and keyboard navigation skips them, so every window remains reachable. Expanding a window persists across navigation and reloads; new windows start collapsed. Searching reveals matching pane rows automatically.
+
+Live preview follows selection between sessions, windows and panes, keeping keyboard focus in the sidebar. Search, expanded branches, scroll and jump history follow you. Browsing a pane that needs input keeps its attention indicator until you actually focus the content.
+
+Names are entered in the sidebar. Use `Ctrl+u` to clear a prompt and Escape to cancel. Native context menus also expose pane splitting, zoom, marking, moving a pane into a new window and detaching session clients.
+
+When the last content pane exits, Binder removes its now-empty window and moves
+you to live content, preferring another window in the same session and then
+another session. Existing windows containing only the sidebar are skipped.
+Exiting the last working pane on the server detaches the client.
+
+To browse without switching content until Enter:
+
+```tmux
+set -g @tmux_pane_tree_live_preview off
 ```
 
-The `tmux-pane-tree.conf` entry point, `@tmux_pane_tree_*` options and legacy
-`@tmux_sidebar_*` options remain compatible with existing configurations.
+## Agent activity
 
-## Usage
+Integrations are available for **Claude Code, Codex, Cursor Agent, OpenCode, Pi, Kiro and Grok**.
 
-| Key          | Action                                        |
-| ------------ | --------------------------------------------- |
-| `prefix t`   | Toggle the sidebar                            |
-| `prefix T`   | Focus the sidebar, or return to the main pane |
+| Indicator | State | Meaning |
+| :---: | --- | --- |
+| `●` | Running | The agent is working |
+| `↳` | Delegating | Subagents are active |
+| `?` | Needs input | The agent is waiting for permission or input |
+| `!` | Error | An error was reported |
+| `✓` | Done | The agent finished its turn |
 
-Inside the sidebar:
+Indicators are monochrome symbols that need no special font. On 256-color terminals, activity uses cyan, input yellow, errors red and completion green. Badges retain their colors on the selected row's tmux background.
 
-| Key                  | Action                            |
-| -------------------- | --------------------------------- |
-| `j` / `k`, arrows    | Move selection and preview live   |
-| `gg` / `G`           | Top / bottom                      |
-| `Ctrl+o` / `Ctrl+i`  | Jump list back / forward          |
-| `Enter`              | Focus the selected content        |
-| `+` / `=`            | Expand selected branch            |
-| `-`                  | Collapse selected branch          |
-| `aw` / `as`          | Add window / session (prompts)    |
-| `rw` / `rs`          | Rename window / session           |
-| `x`                  | Close item; confirm for headers   |
-| `f`                  | Toggle pane filter                |
-| `p`                  | Toggle hide-panes mode            |
-| `Ctrl+l`             | Return focus to the main pane     |
-| `q`                  | Close the sidebar                 |
+Every window summarizes all of its content panes, even when collapsed or filtered. `?1 ●2` means one pane needs input and two are working. When every state occurs once, symbols appear without counts. Counts refer to panes, not the number of subagents.
 
-Names are entered inside the sidebar. Ctrl+u clears the prompt and Escape
-cancels it. Search and names accept Unicode. Use h/l or the left/right arrows
-to collapse and expand window branches. Use / to search and n/N to move between matches.
-Use m or right click to open the context menu. Collapsed branches survive reloads.
-Context menus also provide splitting, zoom, marking and moving a pane to a new
-window. Session menus can detach their clients.
+Focusing a pane clears its `?` state. Completion stays visible until the next run.
 
-Pane lists start collapsed, leaving sessions and windows visible. Select a window
-and press `l`, Right, `+` or `=` to show its panes, or `h`, Left or `-` to hide them.
-Collapsing from a pane returns to its window row. Session headings always remain
-expanded, keeping every window reachable with j/k. Explicit expansions survive
-navigation and reloads; new windows start collapsed. Collapsed windows retain their most urgent agent
-badge, and search opens matching panes automatically.
+### Connect your agents
 
-The tree uses compact indentation and `▸` / `▾` branch indicators. Session
-headings, a full-row selection highlight and muted guides follow your tmux theme.
-Status badges stay aligned on the right, even when a long name is truncated.
-A small key hint appears at the bottom while the sidebar has focus.
+Run the installer from the plugin directory, selecting the integrations you use:
 
-Moving through window and pane rows immediately shows their live window contents.
-Session titles stay visible and are skipped by j/k, the up/down arrows and gg/G.
-Keyboard focus stays in the sidebar, so you can continue browsing.
-Enter or Ctrl+l focuses the selected content. Search, collapsed branches and
-navigation history follow you across sessions and windows. Previewing a pane
-keeps its attention badge until you actually focus it.
+```bash
+cd ~/.config/tmux/plugins/tmux-binder
+bash scripts/features/hooks/install-agent-hooks.sh \
+  --agent claude --agent codex
+```
 
-Window names remain stable while the sidebar has focus. Tmux's automatic naming
-and custom name formats continue when you return to a content pane. Manually
-assigned names are preserved.
+For TPM installations, use the plugin directory chosen by TPM, commonly `~/.tmux/plugins/tmux-binder`. Accepted agent names are `claude`, `codex`, `cursor`, `opencode`, `pi`, `kiro` and `grok`.
 
-Set `@tmux_pane_tree_live_preview` to `off` to browse without changing the visible
-window until Enter. This also keeps the previous navigation through pane rows.
+The installer updates existing Binder hooks, migrates recognized older paths and removes duplicates. It preserves other integrations, existing file permissions and symlinks, and keeps up to three timestamped backups per configuration file.
 
-New windows and sessions insert next to the selected row. Closing the last
-pane removes its window, and the last window removes its session.
+**Codex:** open `/hooks` and review and trust the new definitions. Existing trust settings are preserved; installation does not bypass review. See the [official Codex hook documentation](https://learn.chatgpt.com/docs/hooks). Already-running agents may need their hooks reloaded or a new agent session before they emit events.
 
-The sidebar has one shared open/closed state. `prefix t` opens it in all
-windows and sessions, including detached ones, or closes it everywhere.
-New windows and sessions inherit that state. q and removing a sidebar pane also
-close it globally. A failed sidebar process is restarted in place, preserving
-content panes. The coordinator also reconnects after an unexpected exit.
+To install or update hooks automatically whenever the plugin loads:
 
-The jump list starts from the pane you came from. The final `Ctrl+o` returns
-you there. It resets when the sidebar loses focus.
+```tmux
+set -g @tmux_pane_tree_install_agent_hooks 1
+```
+
+This mode, and running the installer without `--agent`, configures **all seven integrations**, including agents that are not installed. Use the selective command above to configure only the agents you need.
+
+<details>
+<summary>Hook locations and delivery behavior</summary>
+
+| Agent | Configuration |
+| --- | --- |
+| Claude Code | `~/.claude/settings.json` |
+| Codex | `~/.codex/hooks.json` |
+| Cursor Agent | `~/.cursor/hooks.json` |
+| OpenCode | `~/.config/opencode/plugins/tmux-pane-tree.js` |
+| Pi | `~/.pi/agent/extensions/tmux-pane-tree.ts` |
+| Kiro | `~/.kiro/agents/tmux-pane-tree.json`, `~/.kiro/settings/cli.json` |
+| Grok | `~/.grok/hooks/tmux-binder.json` (or under `GROK_HOME`) |
+
+Codex uses native lifecycle events for working, permission requests, completion and delegated activity. Recognized legacy Binder `notify` callbacks are removed from `config.toml`; unrelated callbacks and hook trust metadata stay intact. Kiro's default agent changes only when it is missing or still a default.
+
+Cursor uses observational events and a neutral prompt response. Its integration does not install tool-permission handlers; permission-denied tool failures can report `needs-input`.
+
+Grok uses native lifecycle hooks and camelCase session metadata. Completion and
+errors survive its later idle notifications, and child-agent events do not
+replace the parent turn's state. Native Grok subagent counts are not tracked.
+Binder's Claude/Cursor wrappers ignore Grok's compatibility invocations to avoid
+duplicate or mislabeled updates. Reload hooks in Grok or start a new session after
+installation. See the [official Grok hook guide](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md).
+
+If Grok's `/hooks` screen reports unsupported `async` fields from Claude or
+unsupported Cursor hook replies, these errors come from vendor compatibility
+imports. The native Binder hooks do not require those imports. To use native
+hooks exclusively, set the following in `~/.grok/config.toml`:
+
+```toml
+[compat.claude]
+hooks = false
+
+[compat.cursor]
+hooks = false
+```
+
+Move any other integrations you need from those imported files to native Grok
+hook files first, preserving their commands and matchers. These settings disable
+Claude/Cursor hook imports throughout Grok, including project hooks. They leave
+the other agents' own settings and Grok's skill, rule and MCP imports intact.
+Restart Grok after changing compatibility settings. Binder's installer leaves
+these preferences to you. See [Grok's compatibility settings](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md#harness-compatibility).
+
+A shared agent daemon can inherit a `TMUX_PANE` belonging to another session. Binder uses the hook's working directory or workspace roots and remembers agent session bindings. Sidebar and shell panes are excluded from workspace matches; ambiguous matches are ignored. Custom payloads can include an explicit `pane_id`, `pane` or `tmux_pane` to distinguish agents in the same directory.
+
+Hooks without a pane or workspace target do nothing outside tmux. Delivery errors are reported on stderr without interrupting the agent. Wrapper entrypoints live in [scripts/features/hooks](scripts/features/hooks), with compatibility examples in [examples](examples).
+
+</details>
+
+To remove selected integrations while keeping other tools' hooks:
+
+```bash
+bash scripts/features/hooks/install-agent-hooks.sh \
+  --remove --agent claude --agent codex
+```
+
+Custom integrations can call `scripts/features/state/update-pane-state.sh` with `--pane "$TMUX_PANE"`, `--app`, `--status` and an optional `--message`.
 
 ## Configuration
 
-Set options with `set -g` in your tmux config.
-
-| Option                                    | Default | Description                                   |
-| ----------------------------------------- | :-----: | --------------------------------------------- |
-| `@tmux_pane_tree_width`                   |  `25`   | Sidebar column width                          |
-| `@tmux_pane_tree_focus_on_open`           |   `1`   | Focus the sidebar when toggled open           |
-| `@tmux_pane_tree_live_preview`            |  `on`   | Preview selected content while browsing       |
-| `@tmux_pane_tree_toggle_key`              |   `t`   | Prefix key to toggle                          |
-| `@tmux_pane_tree_focus_key`               |   `T`   | Prefix key to focus                           |
-| `@tmux_pane_tree_session_order`           |    -    | Comma-separated session order, rest follow    |
-| `@tmux_pane_tree_filter`                  |    -    | Comma-separated pane filter (see below)       |
-| `@tmux_pane_tree_hide_panes`              |  `off`  | Show only sessions and windows                |
-| `@tmux_pane_tree_collapse_panes`          |  `on`   | Start window branches with panes collapsed    |
-| `@tmux_pane_tree_compact_single_panes`    |  `off`  | Fold single-pane windows into one row         |
-| `@tmux_pane_tree_scrolloff`               |   `8`   | Rows kept visible around the cursor, `0` off  |
-| `@tmux_pane_tree_icon_theme`              | `auto`  | `auto`, `ascii`, `unicode`, or `nerdfont`     |
-| `@tmux_pane_tree_icon_<app>`              |    -    | Override one app icon                         |
-| `@tmux_pane_tree_badge_<status>`          |    -    | Override one status badge                     |
-| `@tmux_pane_tree_color_session`           |    -    | Session name color, tmux color or hex         |
-| `@tmux_pane_tree_color_window`            |    -    | Window name color, tmux color or hex          |
-| `@tmux_pane_tree_color_pane`              |    -    | Pane name color, tmux color or hex            |
-| `@tmux_pane_tree_install_agent_hooks`     |   `0`   | Install agent hooks when the plugin loads     |
-| `@tmux_pane_tree_<action>_shortcut`       |    -    | Override a sidebar shortcut (see below)       |
-
-| Environment variable        | Description                                                  |
-| --------------------------- | ------------------------------------------------------------ |
-| `TMUX_PANE_TREE_STATE_DIR`  | State directory, default `$XDG_STATE_HOME/tmux-sidebar`      |
-| `TMUX_PANE_TREE_PLUGIN_DIR` | Plugin root used by the example hooks                        |
-| `TMUX_PANE_TREE_FONT_DIRS`  | Path-separated font directories checked by icon theme `auto` |
-
-**Pane filter.** Case-insensitive match against pane command, title, and agent
-metadata. `f` toggles it at runtime.
+Set options with `set -g` in your tmux configuration. For example:
 
 ```tmux
-set -g @tmux_pane_tree_filter "claude,codex,cursor,opencode"
+set -g @tmux_pane_tree_width 30
+set -g @tmux_pane_tree_live_preview on
+set -g @tmux_pane_tree_collapse_panes on
 ```
 
-**Compact single-pane windows.** Set `@tmux_pane_tree_compact_single_panes` to
-`on` to show a window with one content pane as one selectable row. The row
-retains the pane's agent status badge. The sidebar pane does not count, and
-filtering does not turn a multi-pane window into a compact row.
-Press `+` or `=` to reveal the pane row even in compact mode. Set
-`@tmux_pane_tree_collapse_panes` to `off` to start ordinary windows expanded.
+### Width and appearance
+
+Drag the sidebar border or use tmux's pane resize commands. The preferred width is shared across windows and remembered after reopening. Narrow windows shrink the sidebar to leave space for every content pane, then recover the preferred width when space becomes available.
+
+Session headings, selection and guides derive their colors from your tmux theme. Selection follows `window-status-current-style`, falling back to the active pane border accent. Terminals without 256-color support keep a monochrome highlight.
+
+```tmux
+set -g @tmux_pane_tree_color_session '#34D399'
+set -g @tmux_pane_tree_icon_theme ascii
+set -g @tmux_pane_tree_badge_running '*'
+```
+
+Icon themes apply to pane icons; status symbols remain the same across themes unless explicitly overridden. Agent names have no extra icon by default. `auto` chooses Nerd Font icons when a Nerd Font is installed on the tmux host, otherwise ASCII. Set the theme explicitly if your terminal font or a remote host does not match that detection.
+
+### Filtering and compact windows
+
+Filter panes by command, title or agent metadata with a comma-separated, case-insensitive list. Press `f` to toggle the filter:
+
+```tmux
+set -g @tmux_pane_tree_filter 'claude,codex,cursor,opencode'
+```
+
+To display a single-pane window as one row:
 
 ```tmux
 set -g @tmux_pane_tree_compact_single_panes on
 ```
 
-**Shortcuts.** Actions: `add_window` (`aw`), `add_session` (`as`), `go_top`
-(`gg`), `go_bottom` (`G`), `jump_back` (`C-o`), `jump_forward` (`C-i`),
-`rename_window` (`rw`), `rename_session` (`rs`), `toggle_filter` (`f`),
-`close_pane` (`x`). If any shortcut is empty, duplicated, a prefix of another,
-or uses the reserved `q`, all ten revert to defaults.
+That row keeps its agent summary. Press `+` or `=` to reveal the pane underneath. To start ordinary window branches expanded, set `@tmux_pane_tree_collapse_panes off`.
+
+<details>
+<summary>All options</summary>
+
+| Option | Default | Description |
+| --- | :---: | --- |
+| `@tmux_pane_tree_width` | `25` | Preferred sidebar width in columns |
+| `@tmux_pane_tree_focus_on_open` | `1` | Focus the sidebar when opening |
+| `@tmux_pane_tree_live_preview` | `on` | Preview selected content while browsing |
+| `@tmux_pane_tree_toggle_key` | `t` | Prefix key to toggle the sidebar |
+| `@tmux_pane_tree_focus_key` | `T` | Prefix key to focus the sidebar |
+| `@tmux_pane_tree_session_order` | unset | Comma-separated session order; remaining sessions follow |
+| `@tmux_pane_tree_filter` | unset | Comma-separated pane filter |
+| `@tmux_pane_tree_filter_enabled` | `on` | Apply the configured filter |
+| `@tmux_pane_tree_hide_panes` | `off` | Show only sessions and windows |
+| `@tmux_pane_tree_collapse_panes` | `on` | Start window branches collapsed |
+| `@tmux_pane_tree_compact_single_panes` | `off` | Fold single-pane windows into one row |
+| `@tmux_pane_tree_scrolloff` | `8` | Visible rows around the cursor; `0` disables the margin |
+| `@tmux_pane_tree_icon_theme` | `auto` | `auto`, `ascii`, `unicode` or `nerdfont` |
+| `@tmux_pane_tree_icon_<app>` | unset | Override one app icon |
+| `@tmux_pane_tree_badge_<status>` | unset | Override a status symbol |
+| `@tmux_pane_tree_color_session` | theme | Session heading color |
+| `@tmux_pane_tree_color_window` | theme | Window label color |
+| `@tmux_pane_tree_color_pane` | theme | Pane label color |
+| `@tmux_pane_tree_install_agent_hooks` | `0` | Install all agent hooks when the plugin loads |
+| `@tmux_pane_tree_<action>_shortcut` | default key | Override a sidebar action shortcut |
+
+Status option suffixes use underscores, for example `badge_needs_input` and `badge_subagent_running`. Colors accept tmux color names, `colourN` indices and hex values.
+
+Supported icon IDs: `claude`, `codex`, `cursor`, `opencode`, `pi`, `kiro`, `grok`, `shell`, `node`, `python`, `git`, `lazygit`, `yazi`, `ranger`, `bb`, `cat`, `clojure`, `java`, `less`, `vim`, `ssh`, `pager`, `top`, `tmux`, `unknown`.
+
+</details>
+
+<details>
+<summary>Custom shortcuts and environment variables</summary>
+
+Customizable actions and defaults: `add_window` (`aw`), `add_session` (`as`), `go_top` (`gg`), `go_bottom` (`G`), `jump_back` (`C-o`), `jump_forward` (`C-i`), `rename_window` (`r`), `rename_session` (`R`), `toggle_filter` (`f`) and `close_pane` (`x`).
+
+To keep the earlier two-key rename bindings, set both options explicitly:
+
+```tmux
+set -g @tmux_pane_tree_rename_window_shortcut rw
+set -g @tmux_pane_tree_rename_session_shortcut rs
+```
 
 ```tmux
 set -g @tmux_pane_tree_close_pane_shortcut dd
 ```
 
-**Icons.** `auto` picks `nerdfont` when a Nerd Font is installed on the tmux
-host, else `ascii`. Installed is not the same as in use: if glyphs render
-wrong, or the session is remote, set the theme explicitly. Badges follow the
-theme. App ids for overrides: `claude`, `codex`, `opencode`, `cursor`, `pi`,
-`kiro`, `shell`, `node`, `python`, `git`, `lazygit`, `yazi`, `ranger`, `bb`,
-`cat`, `clojure`, `java`, `less`, `vim`, `ssh`, `pager`, `top`, `tmux`,
-`unknown`.
+If a shortcut is empty, duplicated, a prefix of another or uses the reserved `q`, all customizable shortcuts revert to their defaults.
 
-```tmux
-set -g @tmux_pane_tree_icon_theme ascii
-set -g @tmux_pane_tree_icon_claude "A"
-set -g @tmux_pane_tree_badge_running "*"
-```
+| Environment variable | Purpose |
+| --- | --- |
+| `TMUX_PANE_TREE_STATE_DIR` | Runtime state root, default `$XDG_STATE_HOME/tmux-sidebar` or `~/.local/state/tmux-sidebar` |
+| `TMUX_PANE_TREE_PLUGIN_DIR` | Plugin root used by compatibility example hooks |
+| `TMUX_PANE_TREE_FONT_DIRS` | Path-separated font directories inspected by the `auto` icon theme |
 
-**Colors.** Unset colors derive from your tmux theme. Named colors, `colourN`
-indices and hex values are supported. Selection uses `window-status-current-style`,
-falling back to the active pane border accent. Inactive sidebars keep a muted
-cursor. Terminals without 256-color support use a monochrome highlight.
+</details>
 
-**Sidebar width.** Drag its border or use tmux's pane resize commands. The
-chosen width is saved and shared across existing and new windows, including
-after closing and reopening the sidebar. It is also preserved when clients
-with different terminal sizes share a session.
-When a window is too narrow, the sidebar shrinks to leave room for every content
-pane. The saved preferred width remains available for larger windows.
-
-## Agent hooks
-
-Agent wrappers parse their payload once and send a normalized event to the
-coordinator. It orders updates, tracks subagents, saves one atomic state snapshot,
-and publishes the resulting badges to every view.
-
-Runtime data is isolated under `$STATE_DIR/servers/<socket-hash>-<server-pid>/`.
-Preferences are stored separately by socket identity. Pane IDs from independent
-tmux servers cannot overwrite each other.
-
-`install-agent-hooks.sh` writes the wiring for every agent and keeps three
-timestamped backups per file:
-
-| Agent    | File                                          |
-| -------- | --------------------------------------------- |
-| Claude   | `~/.claude/settings.json`                     |
-| Codex    | `~/.codex/config.toml` (`notify` line)        |
-| Cursor   | `~/.cursor/hooks.json`                        |
-| OpenCode | `~/.config/opencode/plugins/tmux-pane-tree.js`|
-| Pi       | `~/.pi/agent/extensions/tmux-pane-tree.ts`    |
-| Kiro     | `~/.kiro/agents/tmux-pane-tree.json`, `~/.kiro/settings/cli.json` |
-
-It replaces the single `notify = [...]` line in `~/.codex/config.toml`, and
-only rewrites Kiro's `chat.defaultAgent` when it is missing or still `kiro_default`.
-
-**Manual wiring.** Copy from `examples/` and point each tool at its wrapper
-under `scripts/features/hooks/`: Claude Code: `hook-claude.sh`, Codex:
-`hook-codex.sh`, Cursor: `hook-cursor.sh`, OpenCode: `hook-opencode.sh`,
-Pi: `hook-pi.sh`, Kiro: `hook-kiro.sh`.
-
-Subagent completions are suppressed so only the parent session shows `done`.
-For that to work:
-
-- Claude Code needs `SessionStart`, `UserPromptSubmit`, `Stop`, `Notification`,
-  `PermissionRequest`, `SessionEnd`, `SubagentStart`, `SubagentStop`.
-- Cursor needs `sessionStart`, `sessionEnd`, `beforeSubmitPrompt`,
-  `preToolUse`, `postToolUse`, `postToolUseFailure`, `subagentStart`,
-  `subagentStop`, `afterAgentThought`, `afterAgentResponse`, `stop`.
-  Cursor has no permission events, so `needs-input` comes from
-  `postToolUseFailure` with `failure_type=permission_denied`.
-- Codex suppression is best-effort via `permission_mode` and `session_id`.
-  Without those markers the completion badge is kept.
-
-Custom integrations call `update-pane-state.sh` directly with `--pane "$TMUX_PANE"`.
-
-## Diagnostics and reload
+## Troubleshooting
 
 Run from a tmux pane:
 
-~~~bash
+```bash
 python3 /path/to/tmux-binder/scripts/binder.py doctor
-~~~
+```
 
-This reports the coordinator PID, connected views, client count, tmux calls,
-state directory and view recovery errors. `engine.log` in that state directory
-contains bounded diagnostic logs. The coordinator has no network listener.
+Diagnostics include the coordinator PID, connected views, client count, agent states, tmux calls, state directory and recovery errors. The reported state directory contains a bounded `engine.log`.
 
-Configuration values update through native tmux events. Reload the plugin after
-changing its tmux keybindings. To reload Python code from a development checkout:
+If agent badges are missing, check that you installed that agent's hooks, completed any trust review and reloaded existing agent sessions. Multiple unbound agents in the same directory need an explicit target to avoid ambiguous attribution.
 
-~~~bash
+Configuration values update through native tmux events. Reload the plugin after changing its keybindings. To load Python changes from a development checkout:
+
+```bash
 bash scripts/reload-live.sh
-~~~
+```
 
-This restarts the coordinator and sidebar processes, preserving content panes,
-pane IDs and layouts. It does not install agent hooks. Hook installation is an
-explicit action unless `@tmux_pane_tree_install_agent_hooks` is enabled.
-
-To remove the plugin's agent hooks while preserving other integrations:
-
-~~~bash
-python3 scripts/binder.py install-hooks --remove
-~~~
+This restarts the coordinator and sidebar views while preserving content processes and pane IDs. Agent hooks are installed separately unless automatic hook installation is enabled.
 
 ## Development
 
-~~~
+The runtime has one Python coordinator per tmux server and a curses view for each sidebar pane. Native tmux events drive shared snapshots; views own input and rendering. Bash entrypoints delegate to Python.
+
+State is scoped to the tmux socket and server generation, so independent servers cannot overwrite each other's agent states. Preferred width is stored separately to survive server restarts. The coordinator uses local Unix sockets and has no network listener.
+
+```text
 scripts/
-  binder.py    command entrypoint
+  binder.py    CLI entrypoint
   binder/      coordinator, model, state, tmux adapter, agents and installer
-  ui/          curses views and pure Unicode/input helpers
-  features/    thin Bash compatibility entrypoints
+  ui/          curses views and Unicode/input helpers
+  features/    Bash compatibility entrypoints
+assets/        project logo variants and usage notes
 tests/
-  unit/        Python domain, protocol, UI and installer tests
-  fixtures/    preserved agent event contracts
-  integration/ isolated real tmux servers and PTY interaction
-~~~
+  unit/        domain, protocol, UI and installer tests
+  fixtures/    agent event contracts
+  integration/ isolated tmux servers and terminal interaction
+```
 
-~~~bash
+Run the full suite:
+
+```bash
 bash tests/run.sh
-~~~
+```
 
-The suite requires tmux and runs isolated servers. It covers multiple clients and
-servers, mouse resizing, zoom, shared visibility, rendered navigation, agent
-ordering, recovery, Unicode prompts and native menus. It never uses the user's
-tmux server. One file can be passed to the same runner.
+The suite covers multiple clients and servers, mouse resizing, zoom, global visibility, live navigation, agent ordering, recovery, Unicode input and native menus on private tmux sockets. It never tests against your running tmux sessions. Pass a test file to the same runner to run it on its own.
 
-For development, link the checkout into tmux's plugin directory and load the
-configuration shown above. Move an existing plugin directory aside first.
+See [CLAUDE.md](CLAUDE.md) for architecture and development conventions, and [CHANGELOG.md](CHANGELOG.md) for changes.
 
-~~~bash
-mkdir -p ~/.config/tmux/plugins
-ln -s "$PWD" ~/.config/tmux/plugins/tmux-binder
-bash scripts/reload-live.sh
-~~~
+## License and credits
 
-## License
+[MIT](LICENSE). tmux-binder is maintained by [Illegal Studio](https://github.com/illegalstudio).
 
-MIT
+Logo variants and generation notes are available in [assets](assets/README.md).
+
+The project started as a fork of [Sandu Dorogan's tmux-pane-tree](https://github.com/sandudorogan/tmux-pane-tree). The original copyright notice remains in the license. The shared coordinator, curses interface and current tmux-binder behavior are developed in this repository.

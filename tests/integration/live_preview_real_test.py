@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import fcntl
+import errno
 import os
 import pty
 import select
+import signal
 import struct
 import subprocess
 import tempfile
 import termios
 import time
+import threading
 import unittest
 from pathlib import Path
 
@@ -28,7 +31,15 @@ class Terminal:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             if select.select([self.master], [], [], min(.02, max(0, deadline - time.monotonic())))[0]:
-                self.output.extend(os.read(self.master, 65536))
+                try:
+                    data = os.read(self.master, 65536)
+                except OSError as error:
+                    if error.errno == errno.EIO:
+                        return
+                    raise
+                if not data:
+                    return
+                self.output.extend(data)
 
     def keys(self, text: str) -> None:
         os.write(self.master, text.encode())
@@ -72,6 +83,89 @@ class Terminal:
 
 
 class LivePreview(unittest.TestCase):
+    def test_held_navigation_keeps_each_step_across_window_handoffs(self):
+        with tempfile.TemporaryDirectory(prefix="binder-preview-repeat-") as directory:
+            server = Harness(Path(directory))
+            terminal = None
+            try:
+                server.t("rename-window", "-t", server.window, "step00")
+                windows = [server.window]
+                for index in range(1, 18):
+                    if index == 9:
+                        windows.append(server.t("new-session", "-dP", "-F", "#{window_id}", "-s", "ops", "-n", f"step{index:02}", "sleep 86400"))
+                    else:
+                        windows.append(server.t("new-window", "-dP", "-F", "#{window_id}", "-t", "work" if index < 9 else "ops", "-n", f"step{index:02}", "sleep 86400"))
+                server.t("set-option", "-g", "@tmux_pane_tree_session_order", "work,ops")
+                terminal = Terminal(server)
+                self.open(server, terminal)
+                server.t("set-option", "-g", "@tmux_pane_tree_collapse_panes", "on")
+                server.api("refresh")
+                terminal.wait(lambda: "▸ step00" in terminal.frame())
+                terminal.keys("gg")
+                terminal.wait(lambda: "step00" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
+                for interval in (.04, .02, .008):
+                    for key, expected in (("j", 12), ("k", 0)):
+                        with self.subTest(interval=interval, key=key):
+                            def repeat():
+                                for _ in range(12):
+                                    os.write(terminal.master, key.encode())
+                                    time.sleep(interval)
+                            writer = threading.Thread(target=repeat)
+                            writer.start()
+                            seen = []
+                            try:
+                                while writer.is_alive():
+                                    terminal.drain(.002)
+                                    pane = terminal.location()[2]
+                                    frame = server.t("capture-pane", "-pt", pane)
+                                    selected = next((line for line in frame.splitlines() if line.startswith("▶") and "step" in line), "")
+                                    if selected and terminal.location()[2] == pane:
+                                        seen.append(int(selected.split("step", 1)[1][:2]))
+                            finally:
+                                writer.join()
+                            terminal.wait(lambda: terminal.location()[1], windows[expected])
+                            terminal.wait(lambda: f"step{expected:02}" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
+                            backwards = [(left, right) for left, right in zip(seen, seen[1:]) if (right < left if key == "j" else right > left)]
+                            self.assertEqual(backwards, [], seen)
+            finally:
+                if terminal is not None:
+                    terminal.close()
+                server.close()
+
+    def test_branch_and_enter_input_during_a_pending_handoff(self):
+        with tempfile.TemporaryDirectory(prefix="binder-preview-pending-") as directory:
+            server = Harness(Path(directory))
+            terminal = None
+            stopped = 0
+            try:
+                other = server.t("new-session", "-dP", "-F", "#{pane_id}", "-s", "ops", "-n", "logs", "sleep 86400")
+                window = server.t("display-message", "-pt", other, "#{window_id}")
+                server.t("set-option", "-g", "@tmux_pane_tree_session_order", "work,ops")
+                terminal = Terminal(server)
+                self.open(server, terminal)
+                server.t("set-option", "-g", "@tmux_pane_tree_collapse_panes", "on")
+                server.api("refresh")
+                terminal.wait(lambda: "▸ logs" in terminal.frame())
+                stopped = int(server.t("display-message", "-pt", server.sidebar(window), "#{pane_pid}"))
+                os.kill(stopped, signal.SIGSTOP)
+                terminal.keys("G")
+                terminal.wait(lambda: "logs" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
+                terminal.keys("=")
+                terminal.wait(lambda: "▾ logs" in terminal.frame())
+                os.kill(stopped, signal.SIGCONT)
+                stopped = 0
+                terminal.wait(lambda: terminal.location(), ["ops", window, server.sidebar(window)])
+                terminal.wait(lambda: "▾ logs" in terminal.frame())
+                terminal.keys("j-\r")
+                terminal.wait(lambda: terminal.location()[2], other)
+                server.wait(lambda: server.api("snapshot", pane=server.sidebar(window))["view_state"].get("expanded_windows"), [])
+            finally:
+                if stopped:
+                    os.kill(stopped, signal.SIGCONT)
+                if terminal is not None:
+                    terminal.close()
+                server.close()
+
     def open(self, server: Harness, terminal: Terminal) -> None:
         server.t("set-option", "-g", "@tmux_pane_tree_collapse_panes", "off")
         terminal.wait(lambda: server.t("display-message", "-p", "-t", server.main, "#{session_attached}"), "1")

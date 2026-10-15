@@ -15,6 +15,7 @@ from .agents import normalize
 from .config import enabled, option
 from .controller import Application, EVENT_CHANNEL
 from .runtime import MAX_MESSAGE, Identity, decode, encode
+from ui.sidebar_ui_lib.view import navigate
 
 
 @dataclass
@@ -39,6 +40,7 @@ class Server:
         self.save_at = 0.0
         self.previews: dict[str, dict] = {}
         self.previews_at = 0.0
+        self.navigation_inputs: dict[str, dict] = {}
 
     def flush_previews(self) -> None:
         pending, self.previews = self.previews, {}
@@ -104,6 +106,7 @@ class Server:
         app.last_event = events[-1].get("kind", "structure")
         app.events += len(events)
         app.refresh()
+        self.navigation_inputs = {client: state for client, state in self.navigation_inputs.items() if client in app.model.clients}
         acknowledged = False
         for event in events:
             if event.get("kind") != "focus":
@@ -177,18 +180,39 @@ class Server:
                 self.save_at = time.monotonic() + 0.3
             return None
         self.flush_events()
-        if command == "preview":
+        if command in {"preview", "navigate"}:
             client = app.client_for(pane, client)
             state = message.get("state", {})
             if not isinstance(state, dict):
                 raise ValueError("Invalid navigation state")
-            if client and int(state.get("input_id", 0)) > int(self.previews.get(client, {}).get("state", {}).get("input_id", 0)):
+            if not client or not app.is_open:
+                return None if peer.pane else {"ok": True}
+            previous = self.navigation_inputs.get(client, {})
+            acknowledged = {pid: stamp for pid, stamp in previous.get("acknowledged", {}).items() if pid in app.model.panes}
+            if command == "navigate":
+                # Reduce every key before coalescing previews; a source view may lag a handoff.
+                context = state if int(state.get("base_id", 0)) >= int(previous.get("input_id", 0)) else previous
+                state = navigate(app.rows, context, message.get("action", ""))
+                acknowledged[pane] = int(message.get("request_id", 0))
+                state = {**state, "input_id": time.monotonic_ns(), "managed": True, "acknowledged": acknowledged}
+                message = {**message, "key": state["selected"]}
+            else:
+                state = {**state, "acknowledged": acknowledged}
+            newest = max(app.latest_preview.get(client, 0), int(self.previews.get(client, {}).get("state", {}).get("input_id", 0)))
+            if client and int(state.get("input_id", 0)) > newest:
+                self.navigation_inputs[client] = state
                 self.previews[client] = {**message, "pane": pane, "state": state}
+                app.navigations = [item for item in app.navigations if item["client"] != client]
                 if not self.previews_at:
                     self.previews_at = time.monotonic() + .015
             return None if peer.pane else {"ok": True}
         if command not in {"subscribe", "doctor", "snapshot"}:
             self.flush_previews()
+        if command in {"toggle", "close", "focus", "focus-main", "activate"}:
+            if client:
+                self.navigation_inputs.pop(client, None)
+            else:
+                self.navigation_inputs.clear()
         if command == "subscribe":
             if pane not in app.model.panes:
                 app.refresh()
@@ -224,7 +248,7 @@ class Server:
         elif command == "agent":
             event = normalize(message["app"], message.get("payload", {}), message.get("event", ""))
             event["updated_at"] = message.get("updated_at")
-            app.update_agent(event, pane, message.get("roots"))
+            app.update_agent(event, pane, message.get("roots"), explicit=message.get("pane_explicit", False))
         elif command == "update-state":
             app.update_agent(message.get("event", {}), pane)
         elif command == "clear-state":

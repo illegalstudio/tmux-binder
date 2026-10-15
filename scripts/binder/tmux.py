@@ -10,7 +10,7 @@ SCHEMAS = {
     "W": ("session_id", "window_id", "window_index", "window_name", "window_width", "window_height", "window_layout", "window_zoomed_flag", "window_active", "automatic-rename", "automatic-rename-format"),
     "S": ("session_id", "session_name", "session_attached", "window_id"),
     "C": ("client_name", "client_pid", "session_id", "window_id", "pane_id", "client_activity", "client_flags"),
-    "G": ("pid", "@tmux_sidebar_enabled", "@tmux_sidebar_main_pane", "pane-active-border-style", "pane-border-style", "status-style", "pane-border-format", "@tmux_pane_tree_resized_pane", "@tmux_pane_tree_focus_pane", "@tmux_pane_tree_focus_client", "window-status-current-style", "window-status-style"),
+    "G": ("pid", "@tmux_sidebar_enabled", "@tmux_sidebar_main_pane", "pane-active-border-style", "pane-border-style", "status-style", "pane-border-format", "@tmux_pane_tree_resized_pane", "@tmux_pane_tree_focus_pane", "@tmux_pane_tree_focus_client", "window-status-current-style", "window-status-style", "@tmux_pane_tree_auto_resize"),
 }
 
 

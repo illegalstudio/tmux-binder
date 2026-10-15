@@ -46,6 +46,9 @@ class View:
         self.input_id = 0
         self.applied_input_id = 0
         self.origin_session = ""
+        self.navigation_request = 0
+        self.navigation_acknowledged = 0
+        self.deferred_keys: list[str | int] = []
 
     def send(self, command: str, **values: object) -> None:
         self.outgoing.extend(encode({"command": command, "pane": self.pane, "client": self.snapshot.get("client", ""), **values}))
@@ -59,11 +62,17 @@ class View:
         self.channel.setblocking(False)
         self.incoming.clear()
         self.outgoing.clear()
+        self.preview_waiting = False
+        self.preview_dirty = False
+        self.navigation_request = 0
+        self.deferred_keys.clear()
         self.send("subscribe")
 
     def accept(self, message: dict) -> None:
         if "error" in message:
             self.preview_waiting = False
+            self.navigation_request = 0
+            self.deferred_keys.clear()
             self.notice = message["error"]
             self.notice_until = time.monotonic() + 5
             self.dirty = True
@@ -87,12 +96,17 @@ class View:
         navigation = message.get("navigation", {})
         navigation_id = int(navigation.get("input_id", 0))
         transferred = False
-        if navigation_id and navigation_id >= self.input_id:
-            self.preview_waiting = False
+        managed = navigation.get("managed", False)
+        if navigation_id and (managed or navigation_id >= self.input_id):
+            if managed:
+                self.navigation_acknowledged = max(self.navigation_acknowledged, int(navigation.get("acknowledged", {}).get(self.pane, 0)))
+            self.preview_waiting = self.navigation_acknowledged < self.navigation_request if managed else False
+            fresh = navigation_id > (self.applied_input_id if managed else self.input_id)
             self.applied_input_id = max(self.applied_input_id, navigation_id)
-            if navigation.get("apply") and navigation_id > self.input_id:
-                self.input_id = navigation_id
+            if navigation.get("apply") and fresh:
+                self.input_id = max(self.input_id, navigation_id)
                 self.selected = navigation["selected"]
+                self.user_scrolled = False
                 self.collapsed = set(navigation.get("collapsed", []))
                 self.expanded_windows = set(navigation.get("expanded_windows", []))
                 self.scroll = navigation.get("scroll", 0)
@@ -127,6 +141,20 @@ class View:
         if message.get("visible") and not previous.get("visible"):
             self.renderer.invalidate()
         self.dirty = True
+        if not self.preview_waiting:
+            deferred, self.deferred_keys = self.deferred_keys, []
+            for key in deferred:
+                self.handle_key(key)
+
+    def navigation_state(self) -> dict:
+        return {"input_id": self.input_id, "base_id": self.applied_input_id, "selected": self.selected, "collapsed": sorted(self.collapsed), "expanded_windows": sorted(self.expanded_windows), "collapse_panes": self.snapshot.get("collapse_panes", False), "scroll": self.scroll, "query": self.query, "searching": self.searching, "jumps": self.jumps, "jump_index": self.jump_index, "origin_session": self.origin_session}
+
+    def navigate(self, action: str) -> None:
+        self.navigation_request = time.monotonic_ns()
+        self.input_id = self.navigation_request
+        self.user_scrolled = False
+        self.preview_waiting = True
+        self.send("navigate", action=action, request_id=self.navigation_request, state=self.navigation_state())
 
     def row(self, key: str = "") -> dict | None:
         return next((row for row in self.snapshot.get("rows", []) if row["key"] == (key or self.selected)), None)
@@ -212,6 +240,9 @@ class View:
             self.preview_waiting = False
             self.send("focus-main")
         elif action in {"go_top", "go_bottom"}:
+            if self.snapshot.get("live_preview"):
+                self.navigate("top" if action == "go_top" else "bottom")
+                return
             targets = navigable(self.rows, self.collapsed, self.snapshot.get("live_preview", False))
             if targets:
                 self.select(targets[0 if action == "go_top" else -1]["key"], True, preview=True)
@@ -246,6 +277,10 @@ class View:
             curses.update_lines_cols()
             self.renderer.invalidate()
             self.dirty = True
+            return
+        navigation_key = key in {"j", "k", curses.KEY_DOWN, curses.KEY_UP, "h", "l", curses.KEY_LEFT, curses.KEY_RIGHT, "+", "=", "-"}
+        if self.deferred_keys or (self.navigation_request > self.navigation_acknowledged and self.preview_waiting and not navigation_key):
+            self.deferred_keys.append(key)
             return
         if key == curses.KEY_MOUSE:
             self.mouse()
@@ -301,6 +336,9 @@ class View:
                 self.action(action)
             return
         if key in {"j", "k", curses.KEY_DOWN, curses.KEY_UP}:
+            if self.snapshot.get("live_preview"):
+                self.navigate("down" if key in {"j", curses.KEY_DOWN} else "up")
+                return
             targets = navigable(self.rows, self.collapsed, self.snapshot.get("live_preview", False))
             if targets:
                 down = key in {"j", curses.KEY_DOWN}
@@ -325,9 +363,15 @@ class View:
             index = next((i for i, row in enumerate(self.rows) if row["key"] == self.selected), 0)
             self.send("menu", row=max(0, index - self.scroll), key=self.selected)
         elif key in {"h", curses.KEY_LEFT, "-"}:
-            self.branch(self.selected, False)
+            if self.snapshot.get("live_preview"):
+                self.navigate("collapse")
+            else:
+                self.branch(self.selected, False)
         elif key in {"l", curses.KEY_RIGHT, "+", "="}:
-            self.branch(self.selected, True)
+            if self.snapshot.get("live_preview"):
+                self.navigate("expand")
+            else:
+                self.branch(self.selected, True)
 
     def mouse(self) -> None:
         try:
@@ -377,7 +421,7 @@ class View:
         self.renderer.draw(self.rows, self.selected, self.scroll, self.attributes, self.query, footer, self.searching or bool(self.prompt), self.collapsed, focused=self.snapshot.get("focused", False))
         self.send("rendered", revision=self.revision, keys=[row["key"] for row in self.rows], scroll=self.scroll, lines=lines, selected=self.selected, collapsed=sorted(self.collapsed), expanded_windows=sorted(self.expanded_windows), navigation_input_id=self.applied_input_id)
         if self.preview_dirty:
-            self.send("preview", key=self.selected, state={"input_id": self.input_id, "selected": self.selected, "collapsed": sorted(self.collapsed), "expanded_windows": sorted(self.expanded_windows), "scroll": self.scroll, "query": self.query, "searching": self.searching, "jumps": self.jumps, "jump_index": self.jump_index, "origin_session": self.origin_session})
+            self.send("preview", key=self.selected, state=self.navigation_state())
             self.preview_dirty = False
         self.dirty = False
 

@@ -4,11 +4,11 @@ import curses
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from binder.runtime import Identity
 from ui.sidebar_ui_lib.application import View
-from ui.sidebar_ui_lib.view import clip, clusters, control_key, ensure_visible, shortcut_step, visible_rows, width
+from ui.sidebar_ui_lib.view import clip, clusters, control_key, ensure_visible, navigate, shortcut_step, visible_rows, width
 
 
 class UnicodeLayout(unittest.TestCase):
@@ -50,7 +50,7 @@ class Keyboard(unittest.TestCase):
         self.view = View(Screen(), Identity("/socket", 1, Path("/unused"), Path("/unused/preferences")), "%9")
         self.rows = [
             {"kind": "session", "key": "$0", "session": "work", "text": "work"},
-            {"kind": "window", "key": "$0/@0", "parent": "$0", "window": "@0", "session_id": "$0", "name": "editor", "text": "editor"},
+            {"kind": "window", "key": "$0/@0", "parent": "$0", "window": "@0", "session_id": "$0", "session": "work", "name": "editor", "text": "editor"},
             {"kind": "pane", "key": "$0/@0/%0", "parent": "$0/@0", "pane_id": "%0", "window": "@0", "session_id": "$0", "text": "shell"},
             {"kind": "pane", "key": "$0/@0/%1", "parent": "$0/@0", "pane_id": "%1", "window": "@0", "session_id": "$0", "text": "café 界"},
         ]
@@ -62,6 +62,14 @@ class Keyboard(unittest.TestCase):
 
     def commands(self):
         return [json.loads(line) for line in self.view.outgoing.splitlines()]
+
+    def navigation_reply(self, state=None):
+        command = self.commands()[-1]
+        self.assertEqual(command["command"], "navigate")
+        result = navigate(self.view.snapshot["rows"], state or command["state"], command["action"])
+        navigation = {**result, "managed": True, "apply": True, "client": "client", "input_id": max(command["request_id"], self.view.applied_input_id) + 1, "acknowledged": {self.view.pane: command["request_id"]}}
+        self.view.accept({**self.view.snapshot, "type": "snapshot", "revision": 2, "navigation": navigation})
+        return navigation
 
     def test_navigation_and_jump_list(self):
         self.view.handle_key("G")
@@ -88,6 +96,16 @@ class Keyboard(unittest.TestCase):
         command = self.commands()[-1]
         self.assertEqual(command["command"], "name")
         self.assertEqual(command["name"], 'A; $(touch nope) "界"')
+
+    def test_r_opens_window_rename_immediately_and_R_renames_the_session(self):
+        self.view.select("$0/@0")
+        self.view.handle_key("r")
+        self.assertEqual(self.view.prompt["action"], "rename_window")
+        self.assertEqual(self.view.prompt["text"], "editor")
+        self.view.handle_key("\x1b")
+        self.view.handle_key("R")
+        self.assertEqual(self.view.prompt["action"], "rename_session")
+        self.assertEqual(self.view.prompt["text"], "work")
 
     def test_closing_and_focus_commands(self):
         self.view.handle_key("\x0c")
@@ -199,17 +217,16 @@ class Keyboard(unittest.TestCase):
         self.view.accept({**message, "revision": 4, "focused": False, "main": "%1"})
         self.assertEqual(self.view.selected, "$0/@0/%1")
 
-    def test_live_navigation_includes_windows_and_batches_preview_until_draw(self):
+    def test_live_navigation_sends_relative_steps_without_changing_a_stale_cursor(self):
         self.view.snapshot.update(live_preview=True, client="client", focused=True)
         for key in ("j", "k", "k"):
             self.view.handle_key(key)
-        self.assertEqual(self.view.selected, "$0/@0")
-        self.assertEqual(self.commands(), [])
+        self.assertEqual(self.view.selected, "$0/@0/%0")
+        self.assertEqual([item["action"] for item in self.commands()], ["down", "up", "up"])
         self.view.renderer = Mock()
         self.view.draw()
         previews = [message for message in self.commands() if message["command"] == "preview"]
-        self.assertEqual(len(previews), 1)
-        self.assertEqual(previews[0]["key"], "$0/@0")
+        self.assertEqual(previews, [])
         self.assertFalse(self.view.preview_dirty)
 
     def test_vertical_navigation_and_top_bottom_skip_session_titles(self):
@@ -220,19 +237,69 @@ class Keyboard(unittest.TestCase):
         self.view.snapshot.update(rows=self.view.rows, live_preview=True)
         self.view.select("$0/@0/%1")
         self.view.handle_key("j")
+        self.navigation_reply()
         self.assertEqual(self.view.selected, "$1/@1")
         self.view.handle_key("k")
+        self.navigation_reply()
         self.assertEqual(self.view.selected, "$0/@0/%1")
         for key in "gg":
             self.view.handle_key(key)
+        self.navigation_reply()
         self.assertEqual(self.view.selected, "$0/@0")
         self.view.handle_key("k")
+        self.navigation_reply()
         self.assertEqual(self.view.selected, "$0/@0")
         self.view.handle_key("G")
+        self.navigation_reply()
         self.assertEqual(self.view.selected, "$1/@1")
+
+    def test_navigation_defers_enter_until_its_own_input_is_acknowledged(self):
+        self.view.snapshot.update(live_preview=True, client="client", focused=True)
+        self.view.handle_key("j")
+        request = self.commands()[-1]["request_id"]
+        self.view.handle_key("\r")
+        self.assertEqual([command["command"] for command in self.commands()], ["navigate"])
+        older = {"managed": True, "apply": True, "client": "client", "input_id": request + 1, "selected": "$0/@0", "acknowledged": {self.view.pane: request - 1}}
+        self.view.accept({**self.view.snapshot, "type": "snapshot", "revision": 2, "navigation": older})
+        self.assertTrue(self.view.preview_waiting)
+        self.assertEqual(self.view.deferred_keys, ["\r"])
+        self.navigation_reply({"selected": "$0/@0/%0"})
+        self.assertEqual(self.commands()[-1]["command"], "activate")
+        self.assertEqual(self.commands()[-1]["key"], "$0/@0/%1")
+
+    def test_navigation_replies_do_not_reset_a_query_or_expanded_branch(self):
+        self.view.snapshot.update(live_preview=True, client="client", focused=True)
+        self.view.query = "界"
+        self.view.expanded_windows = {"$0/@0"}
+        self.view.handle_key("k")
+        self.navigation_reply()
+        self.assertEqual(self.view.query, "界")
+        self.assertEqual(self.view.expanded_windows, {"$0/@0"})
+
+    def test_old_managed_reply_cannot_reverse_selection_or_acknowledgement(self):
+        self.view.snapshot.update(live_preview=True, client="client", focused=True)
+        self.view.handle_key("j")
+        old = self.navigation_reply()
+        self.view.handle_key("k")
+        self.navigation_reply()
+        self.view.accept({**self.view.snapshot, "navigation": old})
+        self.assertEqual(self.view.selected, "$0/@0/%0")
+        self.assertFalse(self.view.preview_waiting)
+
+    def test_reconnect_does_not_replay_a_deferred_selection_action(self):
+        self.view.snapshot.update(live_preview=True, client="client", focused=True)
+        self.view.handle_key("j")
+        self.view.handle_key("\r")
+        with patch("ui.sidebar_ui_lib.application.connect", return_value=Mock()):
+            self.view.reconnect()
+        self.assertEqual([item["command"] for item in self.commands()], ["subscribe"])
+        self.assertFalse(self.view.preview_waiting)
+        self.assertEqual(self.view.deferred_keys, [])
 
     def test_older_handoff_cannot_replace_newer_keyboard_input(self):
         self.view.snapshot.update(live_preview=True, client="client", focused=True)
+        self.view.handle_key("G")
+        self.navigation_reply()
         self.view.handle_key("G")
         stamp = self.view.input_id
         message = {**self.view.snapshot, "type": "snapshot", "revision": 2, "navigation": {"input_id": stamp - 1, "apply": True, "selected": "$0/@0/%0"}}

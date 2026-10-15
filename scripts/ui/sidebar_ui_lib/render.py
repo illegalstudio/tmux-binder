@@ -40,6 +40,9 @@ def style_parts(style: str) -> tuple[int, int, int]:
 
 def colors(configuration: dict, styles: dict) -> dict[str, int]:
     result = {"session": curses.A_BOLD, "window": 0, "pane": curses.A_DIM, "guide": curses.A_DIM, "selected": curses.A_REVERSE | curses.A_BOLD}
+    for status in ("running", "subagent-running", "needs-input", "done", "error"):
+        result["status:" + status] = curses.A_BOLD
+        result["selected-status:" + status] = result["selected"]
     if not curses.has_colors() or curses.COLORS < 256:
         return result
     pairs: dict[tuple[int, int], int] = {}
@@ -74,12 +77,40 @@ def colors(configuration: dict, styles: dict) -> dict[str, int]:
     result["selected"] = pair(foreground, background) | flags | curses.A_BOLD
     if background == -1:
         result["selected"] |= curses.A_REVERSE
-    for status, color in (("running", 6), ("subagent-running", 5), ("needs-input", 3), ("done", 2), ("error", 1)):
+    selected_background = foreground if result["selected"] & curses.A_REVERSE else background
+    for status, color in (("running", 6), ("subagent-running", 6), ("needs-input", 3), ("done", 2), ("error", 1)):
         result["status:" + status] = pair(color) | curses.A_BOLD
+        result["selected-status:" + status] = pair(color + 8 if color == selected_background else color, selected_background) | curses.A_BOLD
     return result
 
 
-def row_text(row: dict, selected: bool, collapsed: bool, cells: int) -> tuple[str, str, str]:
+def badge_runs(row: dict, collapsed: bool, cells: int) -> list[tuple[str, str]]:
+    if cells <= 0:
+        return []
+    badge = row.get("collapsed_badge", row.get("badge", "")) if collapsed else row.get("badge", "")
+    status = row.get("collapsed_status", row.get("status", "")) if collapsed else row.get("status", "")
+    parts = row.get("badges", [{"text": badge, "symbol": badge, "status": status}])
+    parts = [part for part in parts if part.get("text")]
+    runs: list[tuple[str, str]] = []
+    used = 0
+    for index, part in enumerate(parts):
+        text = (" " if runs else "") + display_text(part["text"])
+        reserve = int(index < len(parts) - 1)
+        if used + width(text) + reserve <= cells:
+            runs.append((text, part["status"]))
+            used += width(text)
+            continue
+        if not runs:
+            symbol = clip(display_text(part.get("symbol", part["text"])), cells)
+            runs.append((symbol, part["status"]))
+            used = width(symbol)
+        if used < cells:
+            runs.append(("…", ""))
+        break
+    return runs
+
+
+def row_layout(row: dict, selected: bool, collapsed: bool, cells: int) -> tuple[str, str, list[tuple[str, str]]]:
     prefix = "▶ " if selected else "  "
     if "label" not in row:
         label = row.get("collapsed_text", row["text"]) if collapsed else row["text"]
@@ -94,13 +125,23 @@ def row_text(row: dict, selected: bool, collapsed: bool, cells: int) -> tuple[st
         icon = row.get("icon", "")
         prefix += "   " + (icon + " " if icon and icon != "?" else "")
         label = row["label"]
-    badge = row.get("collapsed_badge", row.get("badge", "")) if collapsed else row.get("badge", "")
-    badge = clip(display_text(badge), cells)
+    budget = cells
+    parts = row.get("badges", [])
+    if len(parts) > 1:
+        reserved = width(display_text(prefix)) + min(4, width(display_text(label))) + 1
+        budget = max(min(width(display_text(parts[0]["text"])), cells), cells - reserved)
+    runs = badge_runs(row, collapsed, budget)
+    badge = "".join(text for text, _ in runs)
     available = max(0, cells - width(badge) - bool(badge))
     prefix = display_text(prefix)
     left = clip(prefix + display_text(label), available)
     text = left + " " * max(0, cells - width(left) - width(badge)) + badge
-    return text, clip(prefix, width(left)), badge
+    return text, clip(prefix, width(left)), runs
+
+
+def row_text(row: dict, selected: bool, collapsed: bool, cells: int) -> tuple[str, str, str]:
+    text, prefix, runs = row_layout(row, selected, collapsed, cells)
+    return text, prefix, "".join(text for text, _ in runs)
 
 
 class Renderer:
@@ -129,24 +170,24 @@ class Renderer:
             is_collapsed = bool(collapsed and row["key"] in collapsed)
             chosen = row["key"] == selected
             highlighted = chosen and focused
-            text, prefix, badge = row_text(row, chosen, is_collapsed, cells)
+            text, prefix, runs = row_layout(row, chosen, is_collapsed, cells)
+            badge = "".join(text for text, _ in runs)
             attribute = attributes.get("selected", curses.A_REVERSE | curses.A_BOLD) if highlighted else attributes.get(row["kind"], 0)
             if chosen and not focused:
                 attribute |= curses.A_DIM
             if query and query.casefold() in text.casefold():
                 attribute |= curses.A_UNDERLINE
-            status = row.get("collapsed_status", row.get("status", "")) if is_collapsed else row.get("status", "")
-            badge_attribute = attribute if highlighted else attributes.get("status:" + status, attribute)
+            badge_attributes = tuple((text, attributes.get(("selected-status:" if highlighted else "status:") + status, attribute)) for text, status in runs)
             guide_attribute = attribute if highlighted else attributes.get("guide", curses.A_DIM)
-            frame.append((text, attribute, prefix, guide_attribute, badge, badge_attribute))
+            frame.append((text, attribute, prefix, guide_attribute, badge, badge_attributes))
         while len(frame) < max(0, lines):
-            frame.append(("", 0, "", 0, "", 0))
+            frame.append(("", 0, "", 0, "", ()))
         if footer and height:
-            frame.append((clip(display_text(footer), cells), 0 if cursor else curses.A_DIM, "", 0, "", 0))
+            frame.append((clip(display_text(footer), cells), 0 if cursor else curses.A_DIM, "", 0, "", ()))
         for y, item in enumerate(frame):
             if y < len(self.previous) and self.previous[y] == item:
                 continue
-            text, attr, prefix, guide_attr, badge, badge_attr = item
+            text, attr, prefix, guide_attr, badge, badge_attributes = item
             try:
                 self.screen.move(y, 0)
                 self.screen.clrtoeol()
@@ -157,7 +198,10 @@ class Renderer:
                     if body:
                         self.screen.addstr(y, width(prefix), body, attr)
                     if badge:
-                        self.screen.addstr(y, cells - width(badge), badge, badge_attr)
+                        column = cells - width(badge)
+                        for run, badge_attr in badge_attributes:
+                            self.screen.addstr(y, column, run, badge_attr)
+                            column += width(run)
             except curses.error:
                 continue
         try:

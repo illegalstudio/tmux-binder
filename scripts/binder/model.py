@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 import json
 import re
@@ -98,6 +99,14 @@ def pane_matches(pane: dict, state: dict, tokens: list[str]) -> bool:
     return any(token in value.lower() for token in tokens for value in values)
 
 
+def window_badges(panes: list[dict], statuses: dict[str, str], badges: dict[str, str]) -> list[dict]:
+    counts = Counter(statuses.get(pane["pane_id"], "") for pane in panes)
+    order = ("needs-input", "error", "subagent-running", "running", "done")
+    active = [status for status in order if counts[status] and badges.get(status)]
+    numbered = any(counts[status] > 1 for status in active)
+    return [{"status": status, "count": counts[status], "symbol": badges[status], "text": badges[status] + (str(counts[status]) if numbered else "")} for status in active]
+
+
 def project_rows(model: Model, states: dict[str, dict], options: dict[str, str], icons: dict[str, str], badges: dict[str, str], captures: dict[str, str]) -> list[dict]:
     tokens = [value.strip().lower() for value in option(options, "filter").split(",") if value.strip()] if enabled(option(options, "filter_enabled"), True) else []
     hide = enabled(option(options, "hide_panes"))
@@ -137,23 +146,19 @@ def project_rows(model: Model, states: dict[str, dict], options: dict[str, str],
                 window_row["compact"] = True
                 pane_id = panes[0]["pane_id"]
                 window_row["pane_id"] = pane_id
-                badge = badges.get(statuses.get(pane_id, ""), "")
-                window_row.update(badge=badge, status=statuses.get(pane_id, ""))
-                if badge:
-                    label += " " + badge
             elif hide:
                 visible_panes = [pane for pane in panes if badges.get(statuses.get(pane["pane_id"], ""), "")]
                 if not visible_panes:
                     window_row["pane_id"] = wid
+            summary = window_badges(content, statuses, badges)
+            badge = " ".join(item["text"] for item in summary)
+            status = summary[0]["status"] if summary else ""
+            window_row.update(badge=badge, status=status, badges=summary, collapsed_badge=badge, collapsed_status=status)
+            if badge:
+                label += " " + badge
             window_row["text"] = f"{prefix}{'└─' if last_window else '├─'} {label}"
             window_row["expandable"] = bool(visible_panes)
-            if not compact_window:
-                active = {statuses.get(pane["pane_id"], "") for pane in panes}
-                status = next((status for status in ("needs-input", "error", "subagent-running", "running", "done") if status in active and badges.get(status)), "")
-                badge = badges.get(status, "")
-                if badge:
-                    window_row["collapsed_text"] = window_row["text"] + " " + badge
-                    window_row.update(collapsed_badge=badge, collapsed_status=status)
+            window_row["collapsed_text"] = window_row["text"]
             rows.append(window_row)
             for pi, pane in enumerate(visible_panes):
                 pid = pane["pane_id"]

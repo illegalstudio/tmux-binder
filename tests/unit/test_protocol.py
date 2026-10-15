@@ -103,3 +103,10 @@ class Configuration(unittest.TestCase):
         self.assertEqual(badges["done"], "")
         with self.assertRaises(ValueError):
             visuals({"@tmux_pane_tree_icon_theme": "missing"})
+
+    def test_status_symbols_and_agent_names_are_consistent_across_icon_themes(self):
+        for theme in ("ascii", "unicode", "nerdfont", "auto"):
+            with self.subTest(theme=theme), patch("binder.config.font_installed", return_value=True):
+                icons, badges = visuals({"@tmux_pane_tree_icon_theme": theme})
+                self.assertEqual(badges, {"running": "●", "subagent-running": "↳", "needs-input": "?", "done": "✓", "error": "!"})
+                self.assertTrue(all(not icons[app] for app in ("claude", "codex", "cursor", "opencode", "pi", "kiro")))

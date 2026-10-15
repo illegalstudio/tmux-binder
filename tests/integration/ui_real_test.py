@@ -74,7 +74,7 @@ class InteractiveUI(unittest.TestCase):
                 target_sidebar = server.sidebar(target)
                 keys("\x02T")
                 wait(lambda: server.t("display-message", "-p", "-t", target_sidebar, "#{pane_active}"), "1")
-                keys("rw")
+                keys("r")
                 wait(lambda: "Rename window:" in frame(target_sidebar))
                 keys("\x15rinominata\r")
                 wait(lambda: server.t("display-message", "-p", "-t", target_sidebar, "#{window_name}"), "rinominata")

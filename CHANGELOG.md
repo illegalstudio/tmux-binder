@@ -4,6 +4,41 @@ All notable project versions are documented here.
 
 ## Unreleased
 
+- Serialize live navigation against one cursor per client before coalescing
+  previews, retaining repeated j/k input across sidebar handoffs. Cancel obsolete
+  switches immediately, preserve branch input during a pending handoff and wait
+  for navigation acknowledgement before applying actions such as Enter.
+- Add the tmux-binder project header, installation guide and square logo in
+  transparent, light and dark variants, retaining the original fork credit.
+- Move clients to live content after a working pane exits, then remove newly
+  sidebar-only windows. Detach after the last working pane exits and preserve
+  historical sidebar-only windows.
+- Open window rename immediately with `r`; use `R` for session rename. Preserve
+  configurable `rw` and `rs` bindings.
+- Recognize the official Grok CLI and install native lifecycle hooks with
+  camelCase metadata, turn ordering and child-event suppression. Avoid duplicate
+  Claude/Cursor compatibility updates and preserve completion after idle pings.
+- Route shared-daemon agent hooks by workspace and remembered agent session,
+  instead of attributing every event to a stale inherited tmux pane.
+- Retain semantic badge colors on selected rows, including themes using reverse
+  selection. Preserve preferred sidebar width across coalesced automatic window
+  resizes and restore it when focusing or previewing a previously scaled window.
+- Connect Codex through native lifecycle hooks, including input requests and
+  subagent tracking, while retaining legacy notify payload compatibility.
+- Migrate and deduplicate Binder-owned legacy agent hooks without removing other
+  integrations or Codex trust metadata. Add per-agent install/remove selection,
+  preserve symlinks and permissions, and retain unrelated notification callbacks.
+- Keep agent hooks harmless outside tmux and report delivery failures without
+  interrupting the agent. Use observational Cursor hooks with a valid prompt
+  response, and make Cursor/OpenCode shell entrypoints executable.
+- Show per-window agent summaries in both collapsed and expanded branches, while
+  retaining individual pane status. Count panes by state, including filtered
+  content, prioritize input/errors and preserve explicit badge overrides.
+- Replace default emoji and font-specific agent badges with monochrome symbols
+  and identify agents by name. Render each summary status in its own color,
+  keep the native selection background and truncate narrow summaries between groups.
+- Notify views when sidebar dimensions change so right-aligned statuses redraw
+  immediately after resizing without keyboard input or extra polling.
 - Make `h` and Left behave like `-`, collapsing the selected window or its pane's
   window. Keep session headings expanded so j/k can always reach their windows,
   and recover session branches hidden by previously saved collapse state.
@@ -38,7 +73,7 @@ All notable project versions are documented here.
 - Add Unicode search and name prompts, persistent collapsed branches, terminal-cell
   clipping and incremental curses drawing. Keep native context menus and layout
   actions, with explicit client and row targets.
-- Normalize all six agent integrations centrally. Preserve subagent tracking,
+- Normalize agent integrations centrally. Preserve subagent tracking,
   completion suppression, focus acknowledgement and live command/title detection,
   including Claude version commands and idle titles. Ignore cosmetic spinner
   frames in title notifications.

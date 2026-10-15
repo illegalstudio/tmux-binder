@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from .runtime import Identity, request
+from .icons import AGENT_APPS
 
 
 def parser() -> argparse.ArgumentParser:
@@ -27,7 +28,7 @@ def parser() -> argparse.ArgumentParser:
         sub.add_argument("--kind", default="structure")
         sub.add_argument("--after-session", dest="session")
     hook = commands.add_parser("hook")
-    hook.add_argument("app", choices=("claude", "codex", "cursor", "opencode", "pi", "kiro"))
+    hook.add_argument("app", choices=AGENT_APPS)
     hook.add_argument("arguments", nargs="*")
     update = commands.add_parser("update-state")
     update.add_argument("--pane", default="")
@@ -42,6 +43,7 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("render")
     install = commands.add_parser("install-hooks")
     install.add_argument("--remove", action="store_true")
+    install.add_argument("--agent", action="append", choices=AGENT_APPS)
     return result
 
 
@@ -103,7 +105,40 @@ def main(arguments: list[str] | None = None) -> None:
         return
     if args.command == "install-hooks":
         from .installer import install, remove
-        (remove if args.remove else install)()
+        (remove if args.remove else install)(args.agent)
+        return
+    if args.command == "hook":
+        if args.app in {"claude", "cursor"} and os.environ.get("GROK_HOOK_EVENT"):
+            return
+        event, payload, raw = read_hook(args.arguments)
+        if args.app == "grok":
+            event = event or os.environ.get("GROK_HOOK_EVENT", "")
+            payload.setdefault("sessionId", os.environ.get("GROK_SESSION_ID", ""))
+            payload.setdefault("cwd", payload.get("workspaceRoot") or os.environ.get("GROK_WORKSPACE_ROOT", ""))
+        explicit = next((str(payload.get(key)) for key in ("pane_id", "pane", "tmux_pane") if re.fullmatch(r"%\d+", str(payload.get(key, "")))), "")
+        candidates = [explicit, os.environ.get("CURSOR_TMUX_PANE", ""), os.environ.get("TMUX_PANE", "")]
+        pane = next((str(value) for value in candidates if value and re.fullmatch(r"%\d+", str(value))), "")
+        roots = payload.get("workspace_roots", [])
+        if isinstance(roots, str):
+            roots = [roots]
+        roots = [value for value in roots if isinstance(value, str)] if isinstance(roots, list) else []
+        cwd = payload.get("cwd")
+        if isinstance(cwd, str) and cwd and (pane or os.environ.get("TMUX") or args.socket):
+            roots = [cwd, *roots]
+        if args.app == "cursor":
+            prompt = str(payload.get("hook_event_name") or event).lower() == "beforesubmitprompt"
+            print(json.dumps({"continue": True} if prompt else {}))
+        if not pane and not roots:
+            return
+        try:
+            identity = Identity.resolve(args.socket)
+            if args.app == "codex" and not payload.get("hook_event_name"):
+                forward = Path(os.environ.get("TMUX_SIDEBAR_CODEX_NOTIFY_FORWARD", str(Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "hooks/peon-ping/adapters/codex.sh")))
+                if forward.is_file() and os.access(forward, os.X_OK):
+                    subprocess.run([str(forward), raw], input=raw, text=True, timeout=5, check=False)
+            request(identity, "agent", app=args.app, payload=payload, event=event, pane=pane, pane_explicit=bool(explicit), roots=roots, updated_at=entered_at)
+        except (ConnectionError, RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
+            print(f"tmux-binder: {args.app} status update failed: {error}", file=sys.stderr)
         return
     identity = Identity.resolve(args.socket)
     if args.command in {"reload", "install"}:
@@ -113,20 +148,6 @@ def main(arguments: list[str] | None = None) -> None:
     if args.command == "serve":
         from .server import serve
         serve(identity)
-        return
-    if args.command == "hook":
-        event, payload, raw = read_hook(args.arguments)
-        candidates = [payload.get("pane_id"), payload.get("pane"), payload.get("tmux_pane"), os.environ.get("CURSOR_TMUX_PANE", ""), os.environ.get("TMUX_PANE", "")]
-        pane = next((str(value) for value in candidates if value and re.fullmatch(r"%\d+", str(value))), "")
-        roots = payload.get("workspace_roots", [])
-        if isinstance(roots, str):
-            roots = [roots]
-        roots = [value for value in roots if isinstance(value, str)] if isinstance(roots, list) else []
-        if args.app == "codex":
-            forward = Path(os.environ.get("TMUX_SIDEBAR_CODEX_NOTIFY_FORWARD", str(Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "hooks/peon-ping/adapters/codex.sh")))
-            if forward.is_file() and os.access(forward, os.X_OK):
-                subprocess.run([str(forward), event], input=raw, text=True, timeout=5, check=False)
-        request(identity, "agent", app=args.app, payload=payload, event=event, pane=pane, roots=roots, updated_at=entered_at)
         return
     data = vars(args).copy()
     command = data.pop("command")

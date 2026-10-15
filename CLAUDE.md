@@ -26,9 +26,17 @@ view per sidebar pane. Bash files are compatibility launchers.
 - Title hooks deduplicate normalized titles in a pane option before signaling.
   Braille spinner frames are equivalent; entering or leaving that state is not.
   Use explicit regex members because Unicode ranges depend on server collation.
-- binder/agents.py normalizes all six integrations and owns ordering,
+- binder/agents.py normalizes all seven integrations and owns ordering,
   subagent lifecycle and detection. Codex terminal probes run centrally.
-- binder/installer.py owns optional agent config changes and backups.
+  Grok uses native camelCase payloads and the grok-native command. Ignore child
+  completions, stale turn-end reports and duplicate Claude/Cursor compatibility
+  invocations. Preserve explicit completion/error across Grok idle notifications.
+- binder/installer.py owns optional agent config changes and backups. Migrate only
+  recognized Binder-owned handlers, preserve foreign hooks and Codex trust state,
+  and keep symlinks/file permissions during atomic writes. Installation/removal
+  can target selected agents. Codex uses native hooks.json lifecycle events;
+  never bypass its user hook-trust review or replace an unrelated notify command.
+  Cursor installs observational events rather than tool-permission handlers.
 - UI code stays in scripts/ui/sidebar_ui_lib/. Views handle input, search,
   scroll, prompts and curses drawing. They do not query tmux or read agent files.
 - scripts/features/ and examples/ preserve public shell paths as launchers.
@@ -42,10 +50,20 @@ view per sidebar pane. Bash files are compatibility launchers.
   zoom and terminal changes must not overwrite user preferences.
   Compute the minimum content width from the complete layout, including split
   borders. Contain a no-space failure per window until its geometry changes.
+  Native window/client resize hooks retain automatic-resize intent across a
+  coalesced size round trip. Never infer a manual resize from that result.
+  Keep both resize intents through non-reconciling refreshes. An explicit pane
+  resize with the same recorded final width takes priority over automatic intent;
+  programmatic resizing must not become a manual preference.
+  Focus and preview restore the preferred width of a previously scaled sidebar.
 - Use explicit client/session/window/pane IDs for actions. A shared tmux pane
   has one shared terminal, so its clients share the curses cursor.
 - User close requests and removing a sidebar close all views. A process failure
   is recoverable and must preserve content panes.
+  Content-pane exits are different: remove newly sidebar-only windows and move
+  affected clients to live content before destroying a session. Skip existing
+  sidebar-only destinations and detach when no live content remains. Never
+  remove historical sidebar-only windows as collateral cleanup.
 - Guard automatic window naming before focusing a sidebar. Keep the original
   format and its local/inherited scope in coordinator state, restore it on close,
   and honor global format changes for inherited windows. The namespaced window
@@ -55,10 +73,17 @@ view per sidebar pane. Bash files are compatibility launchers.
   view before switching the originating client. Monotonic input IDs prevent an
   older snapshot from replacing newer keyboard input. Coalesce previews per
   client, and never acknowledge agent attention until content receives focus.
+  Reduce relative navigation inputs against one coordinator cursor per client
+  before coalescing previews. Keep the pure reducer with the UI navigation code.
+  Cancel obsolete handoffs as soon as a newer input arrives. Per-view input
+  acknowledgements order deferred actions after movement; never replay deferred
+  actions after reconnecting. Branch keys and top/bottom jumps use the same stream.
   Vertical navigation and top/bottom jumps skip session titles; branch controls
   only expand/collapse windows. Session headings stay expanded and explicit
   session actions can still select them. Drop legacy session collapses when
   restoring view state or accepting a preview handoff.
+  Default rename keys are r for the selected window and R for its session.
+  Both old rw/rs bindings remain configurable explicitly without prefix conflicts.
 - Window branches start collapsed. Persist explicit window expansions and transfer
   them with preview state so snapshots do not close branches the user opened.
   Retain pane rows in compact projections so expansion and search can reveal them.
@@ -69,6 +94,21 @@ view per sidebar pane. Bash files are compatibility launchers.
   viewport height so mouse actions cannot target rows underneath footer hints.
   Clear the physical curses screen when visible row order or geometry changes;
   retain incremental row updates while the layout is stable.
+- Every window carries an agent summary, collapsed or expanded, over all of its
+  content panes, including filtered pane rows. Count panes per status, never
+  subagents or sidebar views. Keep input/error priority, per-pane detail and
+  custom icon/badge overrides. Use the same monochrome status symbols for every
+  icon theme and identify agents by name without default icons.
+  Project structured status runs so the renderer colors each group separately,
+  reserves right-aligned space and clips between groups in narrow panes. Preserve
+  the native selection background while retaining semantic badge colors, without
+  reversing the badge foreground. Include view dimensions in publication
+  context so resizing wakes sleeping views without polling.
+- Hook environment pane IDs can be stale under a shared agent daemon. Route by
+  an explicit payload pane, a remembered agent session binding, or a unique
+  workspace match among content panes of the same app. Never resolve ambiguity
+  by the active pane or lowest ID. Preserve the no-tmux behavior for cwd-only
+  hook payloads outside tmux.
 - Keep @tmux_pane_tree_* options and legacy @tmux_sidebar_* compatibility at
   the boundary. New runtime state belongs in the coordinator, not flat tmux
   options or per-view IPC files.
