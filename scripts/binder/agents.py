@@ -59,7 +59,7 @@ def normalize(app: str, data: dict, event: str = "") -> dict:
         "app": app, "status": status, "message": message, "subagent_event": subagent_event,
         "event": str(payload.get("hook_event_name") or payload.get("hookEventName") or payload.get("event") or payload.get("type") or event),
         "session_id": str(payload.get("session_id") or payload.get("conversation_id") or payload.get("sessionId") or ""),
-        "run_id": str(payload.get("turn_id") or payload.get("run_id") or payload.get("promptId") or ""),
+        "run_id": str(payload.get("turn_id") or payload.get("run_id") or payload.get("promptId") or (payload.get("generation_id") if app == "cursor" else "") or ""),
         "notification_type": str(payload.get("notification_type") or payload.get("notificationType") or ""),
         "subagent_id": str(payload.get("agent_id") or payload.get("subagent_id") or ""),
         "delegated": app == "codex" and payload.get("permission_mode") in {"delegate", "dangerouslySkipPermissions"},
@@ -98,6 +98,18 @@ class AgentStore:
             return False
         run = event.get("run_id", "")
         prior_run = previous.get("run_id", "")
+        if event.get("app") == "cursor" and previous.get("app") == "cursor" and (
+            not event.get("session_id") or not previous.get("session_id") or event["session_id"] == previous["session_id"]
+        ):
+            if normalized == "sessionstart" and event.get("session_id") and event["session_id"] == previous.get("session_id"):
+                return False
+            if run and prior_run and run != prior_run and normalized not in {"beforesubmitprompt", "sessionstart", "sessionend"}:
+                return False
+            # Cursor fires observational hooks asynchronously. A late callback
+            # cannot reopen a turn that its stop hook already finished.
+            previous_event = re.sub(r"[^a-z]", "", previous.get("event", "").lower())
+            if previous_event in {"stop", "sessionend"} and normalized in {"pretooluse", "posttooluse", "posttoolusefailure", "afteragentthought", "afteragentresponse"}:
+                return False
         if event.get("app") == "grok" and run and prior_run and run != prior_run and normalized != "userpromptsubmit":
             return False
         if run and prior_run and run != prior_run and status not in {"running", "idle"}:
@@ -127,6 +139,7 @@ class AgentStore:
             "message": str(event.get("message", "")), "updated_at": stamp,
             "subagent_count": count, "subagent_ids": sorted(ids), "run_id": run or prior_run,
             "session_id": event.get("session_id") or previous.get("session_id", ""),
+            "event": str(event.get("event", "")),
         }
         return True
 
@@ -533,6 +546,8 @@ def state_agent_app(command: str, title: str, state: dict | None) -> str:
     if app not in AGENT_APPS:
         return ""
     if app == "cursor":
+        if should_preserve_live_label(command, title):
+            return ""
         if status and status != "idle":
             return "cursor"
         # cursor-agent runs under a generic command like "node", so an idle
@@ -584,7 +599,9 @@ def live_agent_app(command: str, title: str, state: dict | None) -> str:
         return "codex"
     if looks_like_opencode(command) or looks_like_opencode(title):
         return "opencode"
-    if looks_like_cursor(command) or looks_like_cursor(title):
+    if normalize_token(command) == "agent" or looks_like_cursor(command):
+        return "cursor"
+    if looks_like_cursor(title) and not ((state or {}).get("app") == "cursor" and normalize_token(command) in NON_AGENT_COMMANDS):
         return "cursor"
     if looks_like_pi(command) or looks_like_pi(title):
         return "pi"

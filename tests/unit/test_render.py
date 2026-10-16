@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import curses
 from unittest.mock import Mock, patch
 
 from ui.sidebar_ui_lib.render import Renderer, colors, row_layout, row_text
@@ -63,6 +64,21 @@ class RowLayout(unittest.TestCase):
             attributes = colors({}, {})
         self.assertTrue(attributes["status:needs-input"])
         self.assertTrue(attributes["status:running"])
+
+    def test_hover_underlines_only_the_label_and_preserves_status_color(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (2, 30)
+        row = {"kind": "window", "key": "$0/@0", "label": "backend", "badges": [{"text": "?", "status": "needs-input"}]}
+        renderer = Renderer(screen)
+        with patch("ui.sidebar_ui_lib.render.curses.curs_set"), patch("ui.sidebar_ui_lib.render.curses.doupdate"):
+            renderer.draw([row], "", 0, {"status:needs-input": 11}, hovered=row["key"])
+            writes = [(call.args[2], call.args[3]) for call in screen.addstr.call_args_list]
+            self.assertIn(("backend", curses.A_UNDERLINE), writes)
+            self.assertIn(("?", 11), writes)
+            screen.addstr.reset_mock()
+            renderer.draw([row], "", 0, {"status:needs-input": 11})
+            self.assertTrue(screen.addstr.called)
+            self.assertFalse(renderer.previous[0][1] & curses.A_UNDERLINE)
 
 
 if __name__ == "__main__":

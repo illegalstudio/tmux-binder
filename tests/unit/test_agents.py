@@ -86,6 +86,39 @@ class AgentEvents(unittest.TestCase):
         store = AgentStore()
         self.assertFalse(store.update("%1", normalize("cursor", {"event": "subagentStop"}), {}))
 
+    def test_cursor_stop_is_authoritative_until_the_next_prompt(self):
+        for generation in ("", "turn"):
+            for hint, expected in (("completed", "done"), ("aborted", "idle"), ("error", "error")):
+                with self.subTest(generation=generation, hint=hint):
+                    store = AgentStore()
+                    payload = {"conversation_id": "session", "generation_id": generation}
+                    store.update("%1", normalize("cursor", payload, "beforeSubmitPrompt"), {})
+                    store.update("%1", normalize("cursor", {**payload, "status": hint}, "stop"), {})
+                    for event in ("afterAgentResponse", "afterAgentThought", "postToolUse", "postToolUseFailure"):
+                        self.assertFalse(store.update("%1", normalize("cursor", payload, event), {}))
+                    self.assertEqual(store.panes["%1"]["status"], expected)
+                    self.assertTrue(store.update("%1", normalize("cursor", payload, "beforeSubmitPrompt"), {}))
+                    self.assertEqual(store.panes["%1"]["status"], "running")
+
+    def test_cursor_generation_rejects_old_running_and_completion_events(self):
+        store = AgentStore()
+        payload = {"conversation_id": "session", "generation_id": "new"}
+        store.update("%1", normalize("cursor", payload, "beforeSubmitPrompt"), {})
+        self.assertEqual(store.panes["%1"]["run_id"], "new")
+        for event, extra in (("stop", {"status": "completed"}), ("postToolUse", {}), ("afterAgentResponse", {})):
+            self.assertFalse(store.update("%1", normalize("cursor", {**payload, "generation_id": "old", **extra}, event), {}))
+        self.assertFalse(store.update("%1", normalize("cursor", {**payload, "generation_id": "session"}, "sessionStart"), {}))
+        self.assertEqual(store.panes["%1"]["status"], "running")
+        self.assertTrue(store.update("%1", normalize("cursor", {**payload, "generation_id": "session"}, "sessionEnd"), {}))
+        self.assertEqual(store.panes["%1"]["status"], "idle")
+
+    def test_cursor_new_session_can_start_after_a_finished_session(self):
+        store = AgentStore()
+        store.update("%1", normalize("cursor", {"conversation_id": "old", "generation_id": "turn", "status": "completed"}, "stop"), {})
+        self.assertTrue(store.update("%1", normalize("cursor", {"conversation_id": "new", "generation_id": "new"}, "sessionStart"), {}))
+        self.assertTrue(store.update("%1", normalize("cursor", {"conversation_id": "new", "generation_id": "next"}, "beforeSubmitPrompt"), {}))
+        self.assertEqual(store.panes["%1"]["status"], "running")
+
     def test_claude_lifecycle_tracks_distinct_subagents(self):
         store = AgentStore()
         for agent in ("a", "b", "a"):
@@ -145,6 +178,17 @@ class AgentEvents(unittest.TestCase):
         self.assertEqual(effective_status("claude", "✳ ready", {"status": "running"}), "")
         self.assertEqual(effective_status("claude", "✳ ready", {"status": "done"}), "done")
         self.assertEqual(effective_status("claude", "⠋ processing", {"status": "subagent-running"}), "subagent-running")
+
+    def test_cursor_agent_command_and_shell_return(self):
+        for command in ("agent", "/opt/cursor/agent", "cursor-agent"):
+            self.assertEqual(live_agent_app(command, "Project notes", {}), "cursor")
+        self.assertEqual(live_agent_app("sleep", "agent", {}), "")
+        for status in ("running", "needs-input", "done", "error", "idle"):
+            state = {"app": "cursor", "status": status, "pane_current_command": "node"}
+            self.assertEqual(live_agent_app("bash", "bash", state), "")
+            self.assertEqual(effective_status("bash", "bash", state), "")
+            self.assertEqual(effective_status("bash", "Cursor Agent", state), "")
+        self.assertEqual(live_agent_app("node", "Project notes", state), "cursor")
 
     def test_codex_terminal_compatibility(self):
         busy = "header\n• Working (2s • esc to interrupt)\n"

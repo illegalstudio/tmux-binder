@@ -254,7 +254,7 @@ class LivePreview(unittest.TestCase):
                     "jumps": [["main", server.main], ["sidebar", session]], "jump_index": 1,
                 })
                 terminal.wait(lambda: terminal.location(), ["ops", server.window, sidebar])
-                terminal.wait(lambda: "ops" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
+                terminal.wait(lambda: server.api("snapshot", pane=sidebar)["view_state"].get("selected"), f"{session}/{server.window}/{server.main}")
                 terminal.keys("\x0f")
                 terminal.wait(lambda: terminal.location(), ["work", server.window, server.main])
             finally:

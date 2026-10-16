@@ -100,16 +100,19 @@ def navigate(rows: list[dict], state: dict, action: str) -> dict:
 
 
 def selection_for(rows: list[dict], key: str, main: str, all_rows: list[dict] | None = None) -> str:
-    if any(row["key"] == key for row in rows):
+    session = key if any(row["key"] == key and row["kind"] == "session" for row in rows) else ""
+    if session:
+        rows = [row for row in rows if row["key"].startswith(session + "/")] or rows
+    if any(row["key"] == key and row["kind"] != "session" for row in rows):
         return key
     match = next((row for row in rows if row.get("pane_id") == main), None)
     if match:
         return match["key"]
-    hidden = next((row["key"] for row in all_rows or [] if row.get("pane_id") == main), "")
-    ancestors = [row["key"] for row in rows if hidden.startswith(row["key"] + "/")]
+    hidden = next((row["key"] for row in all_rows or [] if row.get("pane_id") == main and (not session or row["key"].startswith(session + "/"))), "")
+    ancestors = [row["key"] for row in rows if row["kind"] != "session" and hidden.startswith(row["key"] + "/")]
     if ancestors:
         return max(ancestors, key=len)
-    return next((row["key"] for row in rows if "pane_id" in row), rows[0]["key"] if rows else "")
+    return next((row["key"] for row in rows if "pane_id" in row), next((row["key"] for row in rows if row["kind"] != "session"), ""))
 
 
 def ensure_visible(index: int, scroll: int, lines: int, margin: int) -> int:

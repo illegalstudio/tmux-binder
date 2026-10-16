@@ -100,6 +100,8 @@ The `tmux-pane-tree.conf` filename and `@tmux_pane_tree_*` option names remain c
 | `j` / `k`, Up / Down | Move selection and preview the selected content |
 | `gg` / `G` | Jump to the first or last selectable item |
 | `Enter` | Focus the selected content pane |
+| Left click | Select and preview an item, keeping focus in the sidebar |
+| Double left click | Focus the clicked content pane |
 | `Ctrl+l` | Return to the content pane |
 | `l`, Right, `+`, `=` | Expand the selected window's panes |
 | `h`, Left, `-` | Collapse the selected window's panes |
@@ -114,9 +116,14 @@ The `tmux-pane-tree.conf` filename and `@tmux_pane_tree_*` option names remain c
 | `m` / right click | Open the native context menu |
 | `q` | Close the sidebar everywhere |
 
-Window branches start collapsed. Session headings stay visible and keyboard navigation skips them, so every window remains reachable. Expanding a window persists across navigation and reloads; new windows start collapsed. Searching reveals matching pane rows automatically.
+Window branches start collapsed. Session headings are labels only: keyboard and mouse navigation skip them, and they do not react to hover or clicks. Expanding a window persists across navigation and reloads; new windows start collapsed. Searching reveals matching pane rows automatically.
 
 Live preview follows selection between sessions, windows and panes, keeping keyboard focus in the sidebar. Search, expanded branches, scroll and jump history follow you. Browsing a pane that needs input keeps its attention indicator until you actually focus the content.
+
+With tmux mouse support enabled (`set -g mouse on`), moving over a label briefly
+underlines it without changing selection or focus. Click once to browse and twice
+to enter the content. When live preview is disabled, a single click only changes
+selection. The hover effect requires a terminal that reports mouse movement.
 
 Names are entered in the sidebar. Use `Ctrl+u` to clear a prompt and Escape to cancel. Native context menus also expose pane splitting, zoom, marking, moving a pane into a new window and detaching session clients.
 

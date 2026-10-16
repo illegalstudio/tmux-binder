@@ -155,7 +155,7 @@ class Renderer:
         self.previous.clear()
         self.needs_clear = True
 
-    def draw(self, rows: list[dict], selected: str, scroll: int, attributes: dict[str, int], query: str = "", footer: str = "", cursor: bool = False, collapsed: set[str] | None = None, focused: bool = True) -> None:
+    def draw(self, rows: list[dict], selected: str, scroll: int, attributes: dict[str, int], query: str = "", footer: str = "", cursor: bool = False, collapsed: set[str] | None = None, focused: bool = True, hovered: str = "") -> None:
         height, columns = self.screen.getmaxyx()
         cells = max(0, columns - 1)
         lines = height - bool(footer)
@@ -175,6 +175,8 @@ class Renderer:
             attribute = attributes.get("selected", curses.A_REVERSE | curses.A_BOLD) if highlighted else attributes.get(row["kind"], 0)
             if chosen and not focused:
                 attribute |= curses.A_DIM
+            if row["key"] == hovered and not highlighted:
+                attribute |= curses.A_UNDERLINE
             if query and query.casefold() in text.casefold():
                 attribute |= curses.A_UNDERLINE
             badge_attributes = tuple((text, attributes.get(("selected-status:" if highlighted else "status:") + status, attribute)) for text, status in runs)
@@ -195,8 +197,11 @@ class Renderer:
                     if prefix:
                         self.screen.addstr(y, 0, prefix, guide_attr)
                     body = text[len(prefix):len(text) - len(badge) if badge else len(text)]
-                    if body:
-                        self.screen.addstr(y, width(prefix), body, attr)
+                    label = body.rstrip() if attr & curses.A_UNDERLINE else body
+                    if label:
+                        self.screen.addstr(y, width(prefix), label, attr)
+                    if len(label) < len(body):
+                        self.screen.addstr(y, width(prefix + label), body[len(label):], attr & ~curses.A_UNDERLINE)
                     if badge:
                         column = cells - width(badge)
                         for run, badge_attr in badge_attributes:

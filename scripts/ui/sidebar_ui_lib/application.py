@@ -49,6 +49,9 @@ class View:
         self.navigation_request = 0
         self.navigation_acknowledged = 0
         self.deferred_keys: list[str | int] = []
+        self.mouse_click: dict = {}
+        self.hovered = ""
+        self.hover_until = 0.0
 
     def send(self, command: str, **values: object) -> None:
         self.outgoing.extend(encode({"command": command, "pane": self.pane, "client": self.snapshot.get("client", ""), **values}))
@@ -66,6 +69,8 @@ class View:
         self.preview_dirty = False
         self.navigation_request = 0
         self.deferred_keys.clear()
+        self.mouse_click = {}
+        self.hover("")
         self.send("subscribe")
 
     def accept(self, message: dict) -> None:
@@ -106,7 +111,8 @@ class View:
             if navigation.get("apply") and fresh:
                 self.input_id = max(self.input_id, navigation_id)
                 self.selected = navigation["selected"]
-                self.user_scrolled = False
+                self.user_scrolled = navigation.get("user_scrolled", False)
+                self.mouse_click = navigation.get("mouse_click", {})
                 self.collapsed = set(navigation.get("collapsed", []))
                 self.expanded_windows = set(navigation.get("expanded_windows", []))
                 self.scroll = navigation.get("scroll", 0)
@@ -120,6 +126,8 @@ class View:
         self.collapsed.difference_update(row["key"] for row in message["rows"] if row["kind"] == "session")
         self.collapsed.update(row["key"] for row in message["rows"] if row["kind"] == "window" and (message.get("collapse_panes", False) or row.get("compact")) and row["key"] not in self.expanded_windows)
         self.rows = visible_rows(message["rows"], self.collapsed)
+        if previous.get("focused") != message.get("focused") or previous.get("rows") != message.get("rows"):
+            self.hover("")
         main = message.get("main", "")
         if not message.get("focused") and not transferred and not self.preview_waiting:
             reset = not previous or previous.get("focused") or previous.get("main") != main
@@ -147,7 +155,7 @@ class View:
                 self.handle_key(key)
 
     def navigation_state(self) -> dict:
-        return {"input_id": self.input_id, "base_id": self.applied_input_id, "selected": self.selected, "collapsed": sorted(self.collapsed), "expanded_windows": sorted(self.expanded_windows), "collapse_panes": self.snapshot.get("collapse_panes", False), "scroll": self.scroll, "query": self.query, "searching": self.searching, "jumps": self.jumps, "jump_index": self.jump_index, "origin_session": self.origin_session}
+        return {"input_id": self.input_id, "base_id": self.applied_input_id, "selected": self.selected, "collapsed": sorted(self.collapsed), "expanded_windows": sorted(self.expanded_windows), "collapse_panes": self.snapshot.get("collapse_panes", False), "scroll": self.scroll, "user_scrolled": self.user_scrolled, "mouse_click": self.mouse_click, "query": self.query, "searching": self.searching, "jumps": self.jumps, "jump_index": self.jump_index, "origin_session": self.origin_session}
 
     def navigate(self, action: str) -> None:
         self.navigation_request = time.monotonic_ns()
@@ -273,17 +281,19 @@ class View:
         self.dirty = True
 
     def handle_key(self, key: str | int) -> None:
+        if key == curses.KEY_MOUSE:
+            self.mouse()
+            return
+        self.hover("")
         if key == curses.KEY_RESIZE:
             curses.update_lines_cols()
             self.renderer.invalidate()
             self.dirty = True
             return
+        self.mouse_click = {}
         navigation_key = key in {"j", "k", curses.KEY_DOWN, curses.KEY_UP, "h", "l", curses.KEY_LEFT, curses.KEY_RIGHT, "+", "=", "-"}
         if self.deferred_keys or (self.navigation_request > self.navigation_acknowledged and self.preview_waiting and not navigation_key):
             self.deferred_keys.append(key)
-            return
-        if key == curses.KEY_MOUSE:
-            self.mouse()
             return
         if self.prompt:
             if key == "\x1b":
@@ -373,27 +383,62 @@ class View:
             else:
                 self.branch(self.selected, True)
 
+    def hover(self, key: str) -> None:
+        if key != self.hovered:
+            self.hovered = key
+            self.dirty = True
+        self.hover_until = time.monotonic() + .6 if key else 0.0
+
     def mouse(self) -> None:
         try:
-            _, _, y, _, state = curses.getmouse()
+            _, x, y, _, state = curses.getmouse()
         except curses.error:
             return
-        if state & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED | curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED):
-            if not 0 <= y < self.screen.getmaxyx()[0] - bool(self.footer()):
-                return
+        height, columns = self.screen.getmaxyx()
+        index = y + self.scroll
+        row = self.rows[index] if 0 <= x < columns and 0 <= y < height - bool(self.footer()) and 0 <= index < len(self.rows) else None
+        if row and row["kind"] == "session":
+            row = None
+        if state & getattr(curses, "REPORT_MOUSE_POSITION", 0):
+            self.mouse_click = {}
+            self.hover(row["key"] if row and not self.prompt and not self.searching else "")
+            return
+        self.hover("")
+        if self.prompt or self.searching:
+            self.mouse_click = {}
+            return
         if state & curses.BUTTON4_PRESSED:
+            self.mouse_click = {}
             self.scroll = max(0, self.scroll - 3)
             self.user_scrolled = True
         elif state & getattr(curses, "BUTTON5_PRESSED", 0x08000000):
+            self.mouse_click = {}
             self.scroll += 3
             self.user_scrolled = True
-        elif state & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
-            index = y + self.scroll
-            if 0 <= index < len(self.rows):
-                self.select(self.rows[index]["key"])
+        elif state & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED | curses.BUTTON1_DOUBLE_CLICKED):
+            if row is None:
+                self.mouse_click = {}
+                return
+            now = time.monotonic()
+            previous = self.mouse_click
+            double = bool(state & curses.BUTTON1_DOUBLE_CLICKED) or (previous.get("key") == row["key"] and previous.get("x") == x and previous.get("y") == y and 0 <= now - previous.get("time", 0) <= .4)
+            self.mouse_click = {} if double else {"key": row["key"], "x": x, "y": y, "time": now}
+            self.select(row["key"], record=True)
+            if not double and self.snapshot.get("live_preview"):
+                self.input_id = time.monotonic_ns()
+                self.preview_dirty = True
+                self.preview_waiting = True
+            self.user_scrolled = True
+            # An absolute mouse choice supersedes older relative keyboard replies.
+            self.navigation_request = 0
+            self.deferred_keys.clear()
+            self.applied_input_id = max(self.applied_input_id, self.input_id)
+            if double:
                 self.action("select")
-        elif state & (curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED):
-            self.send("menu", row=y)
+        elif state & (curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED | curses.BUTTON3_RELEASED):
+            self.mouse_click = {}
+            if row and state & (curses.BUTTON3_CLICKED | curses.BUTTON3_RELEASED):
+                self.send("menu", row=y)
         self.dirty = True
 
     def footer(self) -> str:
@@ -418,7 +463,7 @@ class View:
         if not self.user_scrolled:
             self.scroll = ensure_visible(index, self.scroll, lines, self.snapshot.get("scrolloff", 8))
         self.scroll = min(max(0, self.scroll), max(0, len(self.rows) - lines))
-        self.renderer.draw(self.rows, self.selected, self.scroll, self.attributes, self.query, footer, self.searching or bool(self.prompt), self.collapsed, focused=self.snapshot.get("focused", False))
+        self.renderer.draw(self.rows, self.selected, self.scroll, self.attributes, self.query, footer, self.searching or bool(self.prompt), self.collapsed, focused=self.snapshot.get("focused", False), hovered=self.hovered)
         self.send("rendered", revision=self.revision, keys=[row["key"] for row in self.rows], scroll=self.scroll, lines=lines, selected=self.selected, collapsed=sorted(self.collapsed), expanded_windows=sorted(self.expanded_windows), navigation_input_id=self.applied_input_id)
         if self.preview_dirty:
             self.send("preview", key=self.selected, state=self.navigation_state())
@@ -437,16 +482,25 @@ class View:
         except curses.error:
             pass
         curses.mousemask(curses.ALL_MOUSE_EVENTS | getattr(curses, "REPORT_MOUSE_POSITION", 0))
+        # Zero can discard clicks batched in the same read; keep aggregation minimal.
+        curses.mouseinterval(1)
         self.reconnect()
+        sys.stdout.write("\x1b[?1003h")
+        sys.stdout.flush()
         try:
             while self.running:
-                if self.dirty:
-                    self.draw()
-                if self.notice and self.notice_until and time.monotonic() >= self.notice_until:
+                now = time.monotonic()
+                if self.hover_until and now >= self.hover_until:
+                    self.hover("")
+                if self.notice and self.notice_until and now >= self.notice_until:
                     self.notice = ""
                     self.dirty = True
+                if self.dirty:
+                    self.draw()
                 assert self.channel is not None
-                readable, writable, _ = select.select([sys.stdin.fileno(), self.channel], [self.channel] if self.outgoing else [], [], 1 if self.notice else None)
+                deadlines = [deadline for deadline in (self.hover_until, self.notice_until if self.notice else 0) if deadline]
+                timeout = max(0, min(deadlines) - time.monotonic()) if deadlines else None
+                readable, writable, _ = select.select([sys.stdin.fileno(), self.channel], [self.channel] if self.outgoing else [], [], timeout)
                 try:
                     if self.channel in writable and self.outgoing:
                         sent = self.channel.send(self.outgoing)
@@ -474,6 +528,8 @@ class View:
                             break
                         self.handle_key(key)
         finally:
+            sys.stdout.write("\x1b[?1003l")
+            sys.stdout.flush()
             if self.channel:
                 self.channel.close()
 

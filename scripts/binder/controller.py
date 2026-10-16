@@ -901,6 +901,8 @@ class Application:
         index = offset + row_map.get("scroll", 0)
         key = key or (keys[index] if 0 <= offset < int(row_map.get("lines", metadata.get("pane_height", 0))) and 0 <= index < len(keys) else "")
         row = next((row for row in self.rows if row["key"] == key), None)
+        if row and row["kind"] == "session":
+            return
         def callback(action: str, command: str = "view-action") -> str:
             return "run-shell -b " + shlex.quote(self.shell_command(command, pane=pane, client=client, action=action, key=key))
         args = ["display-menu", "-M", "-c", client, "-t", pane, "-x", "R", "-y", str(max(0, mouse_row)), "-T", " Binder "]

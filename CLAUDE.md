@@ -36,6 +36,9 @@ minimum and current tmux versions and tests each with Python 3.10 and 3.14.
   Use explicit regex members because Unicode ranges depend on server collation.
 - binder/agents.py normalizes all seven integrations and owns ordering,
   subagent lifecycle and detection. Codex terminal probes run centrally.
+  Cursor recognizes agent and cursor-agent commands, orders turns by
+  generation_id and preserves stop/sessionEnd against late observational hooks.
+  Stale Cursor state and titles must not keep a shell pane marked as active.
   Grok uses native camelCase payloads and the grok-native command. Ignore child
   completions, stale turn-end reports and duplicate Claude/Cursor compatibility
   invocations. Preserve explicit completion/error across Grok idle notifications.
@@ -93,15 +96,24 @@ minimum and current tmux versions and tests each with Python 3.10 and 3.14.
   acknowledgements order deferred actions after movement; never replay deferred
   actions after reconnecting. Branch keys and top/bottom jumps use the same stream.
   Vertical navigation and top/bottom jumps skip session titles; branch controls
-  only expand/collapse windows. Session headings stay expanded and explicit
-  session actions can still select them. Drop legacy session collapses when
-  restoring view state or accepting a preview handoff.
+  only expand/collapse windows. Session headings stay expanded; explicit session
+  actions resolve to their active content without selecting the heading. Drop
+  legacy session collapses when restoring view state or accepting a preview handoff.
   Default rename keys are r for the selected window and R for its session.
   Both old rw/rs bindings remain configurable explicitly without prefix conflicts.
 - Window branches start collapsed. Persist explicit window expansions and transfer
   them with preview state so snapshots do not close branches the user opened.
   Retain pane rows in compact projections so expansion and search can reveal them.
   Acknowledged preview state must not override newer persisted state on view restart.
+- A single left click selects/previews while retaining sidebar focus; a double
+  click activates the content. Only windows and panes accept pointer input;
+  session headings have no hover or mouse actions. Carry click identity,
+  coordinates and monotonic time through preview handoffs, preserving scroll so
+  the second click still targets the same row. Decode mouse events before
+  deferring keyboard actions.
+  Hover briefly underlines labels without moving selection. Enable all-motion
+  reporting explicitly and clear it on exit. Open right-click menus after release,
+  including the curses fallback with tmux mouse off. No timer remains active at rest.
 - Keep styling understated and integrated with tmux. Project structured labels,
   icons and badges separately from legacy text, reserve room for status badges,
   and keep one visual row per tree item. Render receipts include the content

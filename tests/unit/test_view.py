@@ -63,6 +63,112 @@ class Keyboard(unittest.TestCase):
     def commands(self):
         return [json.loads(line) for line in self.view.outgoing.splitlines()]
 
+    def mouse(self, y, state, now=10.0, x=8):
+        with patch("ui.sidebar_ui_lib.application.curses.getmouse", return_value=(0, x, y, 0, state)), patch("ui.sidebar_ui_lib.application.time.monotonic", return_value=now):
+            self.view.handle_key(curses.KEY_MOUSE)
+
+    def test_single_click_previews_without_activating_and_release_is_ignored(self):
+        self.view.snapshot.update(live_preview=True, focused=True)
+        self.mouse(3, curses.BUTTON1_PRESSED)
+        self.mouse(3, curses.BUTTON1_RELEASED)
+        self.assertEqual(self.view.selected, "$0/@0/%1")
+        self.assertTrue(self.view.preview_dirty)
+        self.assertTrue(self.view.user_scrolled)
+        self.assertEqual(self.commands(), [])
+        self.mouse(3, curses.BUTTON1_PRESSED, now=10.2)
+        self.assertEqual([(item["command"], item["key"]) for item in self.commands()], [("activate", "$0/@0/%1")])
+        self.assertFalse(self.view.preview_dirty)
+
+    def test_double_click_requires_the_same_item_and_position_within_the_interval(self):
+        for y, x, now in ((2, 8, 10.1), (3, 9, 10.1), (3, 8, 10.5)):
+            with self.subTest(y=y, x=x, now=now):
+                self.view.mouse_click = {}
+                self.mouse(3, curses.BUTTON1_PRESSED)
+                self.mouse(y, curses.BUTTON1_PRESSED, now=now, x=x)
+                self.assertEqual(self.commands(), [])
+
+    def test_mouse_ignores_footer_blank_rows_and_prompts(self):
+        self.view.snapshot["focused"] = True
+        for y in (-1, 4, 19):
+            with self.subTest(y=y):
+                self.mouse(y, curses.BUTTON1_DOUBLE_CLICKED)
+                self.assertEqual(self.commands(), [])
+        self.view.action("rename_window")
+        self.mouse(3, curses.BUTTON1_DOUBLE_CLICKED)
+        self.assertEqual(self.commands(), [])
+        self.assertEqual(self.view.selected, "$0/@0/%0")
+
+    def test_click_uses_scrolled_coordinates_and_cancels_an_older_keyboard_reply(self):
+        self.view.snapshot.update(live_preview=True, focused=True)
+        self.view.handle_key("j")
+        older = self.commands()[-1]["request_id"]
+        self.view.handle_key("\r")
+        self.assertEqual(self.view.deferred_keys, ["\r"])
+        self.view.scroll = 1
+        self.mouse(0, curses.BUTTON1_PRESSED)
+        self.assertEqual(self.view.selected, "$0/@0")
+        self.assertEqual(self.view.deferred_keys, [])
+        self.view.accept({**self.view.snapshot, "type": "snapshot", "revision": 2, "navigation": {"managed": True, "apply": True, "client": "client", "input_id": older, "selected": "$0/@0/%1"}})
+        self.assertEqual(self.view.selected, "$0/@0")
+        self.assertNotIn("activate", [item["command"] for item in self.commands()])
+
+    def test_hover_does_not_move_selection_or_send_commands_and_keyboard_clears_it(self):
+        self.mouse(3, curses.REPORT_MOUSE_POSITION)
+        self.assertEqual(self.view.hovered, "$0/@0/%1")
+        self.assertEqual(self.view.selected, "$0/@0/%0")
+        self.assertEqual(self.commands(), [])
+        self.view.dirty = False
+        self.mouse(3, curses.REPORT_MOUSE_POSITION, now=10.1)
+        self.assertFalse(self.view.dirty)
+        self.assertAlmostEqual(self.view.hover_until, 10.7)
+        self.view.handle_key("l")
+        self.assertEqual(self.view.hovered, "")
+        self.assertEqual(self.view.hover_until, 0)
+
+    def test_right_click_waits_for_release_before_opening_the_native_menu(self):
+        self.mouse(3, curses.BUTTON3_PRESSED)
+        self.assertEqual(self.commands(), [])
+        self.mouse(3, curses.BUTTON3_RELEASED, now=10.1)
+        self.assertEqual([(item["command"], item["row"]) for item in self.commands()], [("menu", 3)])
+
+    def test_session_headings_ignore_all_pointer_interactions(self):
+        selected = self.view.selected
+        for preview in (False, True):
+            self.view.snapshot["live_preview"] = preview
+            for state in (curses.REPORT_MOUSE_POSITION, curses.BUTTON1_PRESSED, curses.BUTTON1_CLICKED, curses.BUTTON1_DOUBLE_CLICKED, curses.BUTTON3_PRESSED, curses.BUTTON3_RELEASED):
+                with self.subTest(preview=preview, state=state):
+                    self.mouse(0, state)
+                    self.assertEqual(self.view.selected, selected)
+                    self.assertEqual(self.view.hovered, "")
+                    self.assertFalse(self.view.preview_dirty)
+                    self.assertEqual(self.commands(), [])
+
+    def test_session_heading_selection_is_discarded_on_restore_and_handoff(self):
+        for source in ("view_state", "navigation"):
+            with self.subTest(source=source):
+                self.view.snapshot = {}
+                self.view.input_id = self.view.applied_input_id = 0
+                state = {"selected": "$0", "collapsed": ["$0/@0"]}
+                if source == "navigation":
+                    state.update(input_id=100, apply=True, client="origin")
+                self.view.accept({"type": "snapshot", "revision": 2, "rows": self.rows, "main": "%0", "focused": True, source: state})
+                self.assertEqual(self.view.selected, "$0/@0")
+
+    def test_preview_handoff_retains_double_click_and_manual_scroll(self):
+        self.view.snapshot.update(live_preview=True, focused=True)
+        self.mouse(3, curses.BUTTON1_PRESSED)
+        state = self.view.navigation_state()
+        destination = View(Screen(), self.view.identity, "%10")
+        destination.accept({**self.view.snapshot, "type": "snapshot", "revision": 2, "navigation": {**state, "apply": True, "client": "client"}})
+        self.assertEqual(destination.mouse_click, self.view.mouse_click)
+        self.assertTrue(destination.user_scrolled)
+        with patch("ui.sidebar_ui_lib.application.curses.update_lines_cols"):
+            destination.handle_key(curses.KEY_RESIZE)
+        self.assertEqual(destination.mouse_click, self.view.mouse_click)
+        with patch("ui.sidebar_ui_lib.application.curses.getmouse", return_value=(0, 8, 3, 0, curses.BUTTON1_PRESSED)), patch("ui.sidebar_ui_lib.application.time.monotonic", return_value=10.2):
+            destination.mouse()
+        self.assertEqual(json.loads(destination.outgoing.splitlines()[-1])["command"], "activate")
+
     def navigation_reply(self, state=None):
         command = self.commands()[-1]
         self.assertEqual(command["command"], "navigate")
