@@ -131,6 +131,24 @@ class AgentEvents(unittest.TestCase):
         self.assertEqual(store.panes["%1"]["status"], "running")
         self.assertEqual(store.panes["%1"]["subagent_count"], 0)
 
+    def test_claude_completion_survives_idle_notification_and_recap_agent(self):
+        store = AgentStore()
+        for event in ("UserPromptSubmit", "Stop"):
+            store.update("%1", normalize("claude", {"hook_event_name": event, "session_id": "s"}), {})
+        self.assertFalse(store.update("%1", normalize("claude", {"hook_event_name": "Notification", "notification_type": "idle_prompt", "session_id": "s"}), {}))
+        self.assertFalse(store.update("%1", normalize("claude", {"hook_event_name": "SubagentStop", "agent_id": "recap", "session_id": "s"}), {}))
+        self.assertFalse(store.update("%1", normalize("claude", {"hook_event_name": "SubagentStop", "session_id": "s"}), {}))
+        self.assertEqual(store.panes["%1"]["status"], "done")
+        store.update("%1", normalize("claude", {"hook_event_name": "PermissionRequest", "session_id": "s"}), {})
+        self.assertFalse(store.update("%1", normalize("claude", {"hook_event_name": "Notification", "notification_type": "idle_prompt", "session_id": "s"}), {}))
+        self.assertEqual(store.panes["%1"]["status"], "needs-input")
+
+    def test_claude_idle_notification_clears_an_interrupted_turn(self):
+        store = AgentStore()
+        store.update("%1", normalize("claude", {"hook_event_name": "UserPromptSubmit"}), {})
+        store.update("%1", normalize("claude", {"hook_event_name": "Notification", "notification_type": "idle_prompt"}), {})
+        self.assertEqual(store.panes["%1"]["status"], "idle")
+
     def test_turn_boundary_clears_missing_subagent_stop(self):
         store = AgentStore()
         store.update("%1", normalize("claude", {"hook_event_name": "SubagentStart"}), {})

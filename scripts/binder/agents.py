@@ -87,6 +87,10 @@ class AgentStore:
         previous = self.panes.get(pane, {})
         if event.get("app") == "grok" and event.get("notification_type") == "idle_prompt" and previous.get("status") in {"done", "error"}:
             return False
+        # Claude reports idle_prompt a minute after every turn. It clears a
+        # turn left busy by an interrupt, never unseen completion or input.
+        if event.get("app") == "claude" and event.get("notification_type") == "idle_prompt" and previous.get("status") in {"done", "error", "needs-input"}:
+            return False
         stamp = int(event.get("updated_at") or time.time_ns())
         if stamp <= 0:
             raise ValueError("Agent timestamp must be positive")
@@ -124,8 +128,11 @@ class AgentStore:
                 ids.add(agent_id)
             status = "subagent-running"
         elif lifecycle == "stop":
-            if not agent_id or agent_id in ids:
-                count = max(0, count - 1)
+            # Claude's recap agent reports only SubagentStop, minutes after
+            # Stop. A stop without a tracked start cannot reopen the turn.
+            if not (agent_id in ids if agent_id else count):
+                return False
+            count = max(0, count - 1)
             ids.discard(agent_id)
             if count:
                 status = "subagent-running"

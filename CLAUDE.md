@@ -42,6 +42,9 @@ minimum and current tmux versions and tests each with Python 3.10 and 3.14.
   Grok uses native camelCase payloads and the grok-native command. Ignore child
   completions, stale turn-end reports and duplicate Claude/Cursor compatibility
   invocations. Preserve explicit completion/error across Grok idle notifications.
+  Claude keeps a static title under tmux, so hooks own its state. Its idle
+  notification clears only busy states, and a subagent stop without a tracked
+  start (its recap agent) never reopens a finished turn.
 - binder/installer.py owns optional agent config changes and backups. Migrate only
   recognized Binder-owned handlers, preserve foreign hooks and Codex trust state,
   and keep symlinks/file permissions during atomic writes. Installation/removal
