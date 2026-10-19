@@ -174,10 +174,13 @@ class AgentEvents(unittest.TestCase):
         for command, app in [("codex-aarch64-apple-darwin", "codex"), ("cursor-agent", "cursor"), ("opencode", "opencode"), ("kiro-cli", "kiro")]:
             self.assertEqual(live_agent_app(command, "", {}), app)
 
-    def test_claude_title_idle_clears_stale_busy(self):
-        self.assertEqual(effective_status("claude", "✳ ready", {"status": "running"}), "")
-        self.assertEqual(effective_status("claude", "✳ ready", {"status": "done"}), "done")
+    def test_claude_static_title_keeps_hook_status(self):
+        for status in ("running", "subagent-running", "needs-input", "done", "error"):
+            self.assertEqual(effective_status("claude", "✳ ready", {"status": status}), status)
+        self.assertEqual(effective_status("claude", "✳ ready", {"status": "idle"}), "")
         self.assertEqual(effective_status("claude", "⠋ processing", {"status": "subagent-running"}), "subagent-running")
+        for frame in ("⠋", "◐", "◑"):
+            self.assertEqual(effective_status("claude", frame + " processing", {"status": "done"}), "running")
 
     def test_cursor_agent_command_and_shell_return(self):
         for command in ("agent", "/opt/cursor/agent", "cursor-agent"):

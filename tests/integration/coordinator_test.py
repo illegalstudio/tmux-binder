@@ -296,7 +296,7 @@ class Coordinator(unittest.TestCase):
             install(["claude", "codex", "cursor", "opencode", "pi", "grok"])
         env = {**server.env, "TMUX": f"{server.socket},{server.identity.server_pid},0", "TMUX_PANE": server.main}
         cases = {
-            "claude": [("UserPromptSubmit", {}, "running"), ("PermissionRequest", {}, "needs-input"), ("PostToolUse", {}, "running"), ("Stop", {}, "done")],
+            "claude": [("UserPromptSubmit", {}, "running"), ("PermissionRequest", {}, "needs-input"), ("PostToolUse", {}, "running"), ("Stop", {}, "done"), ("UserPromptSubmit", {}, "running"), ("StopFailure", {}, "error")],
             "codex": [("UserPromptSubmit", {}, "running"), ("PermissionRequest", {}, "needs-input"), ("PostToolUse", {}, "running"), ("SubagentStart", {"agent_id": "child"}, "subagent-running"), ("SubagentStop", {"agent_id": "child"}, "running"), ("Stop", {}, "done")],
             "cursor": [("beforeSubmitPrompt", {}, "running"), ("postToolUseFailure", {"failure_type": "permission_denied"}, "needs-input"), ("postToolUse", {}, "running"), ("stop", {"status": "completed"}, "done")],
             "opencode": [("session.status", {"status": "running"}, "running"), ("permission.asked", {}, "needs-input"), ("session.idle", {}, "done")],
@@ -361,7 +361,7 @@ class Coordinator(unittest.TestCase):
     def test_animated_titles_do_not_wake_the_coordinator_for_each_frame(self):
         server = self.server()
         server.open()
-        animation = "import sys,time\nfor i in range(120):\n sys.stdout.write('\\033]2;' + chr(0x2801 + i % 100) + ' Working\\007'); sys.stdout.flush(); time.sleep(.01)\nprint('animation complete',flush=True)\ntime.sleep(86400)"
+        animation = "import sys,time\nfor i in range(120):\n frame = '\\u25d0\\u25d1'[i % 2] if i % 3 == 0 else chr(0x2801 + i % 100)\n sys.stdout.write('\\033]2;' + frame + ' Working\\007'); sys.stdout.flush(); time.sleep(.01)\nprint('animation complete',flush=True)\ntime.sleep(86400)"
         server.t("respawn-pane", "-k", "-t", server.main, shlex.join([sys.executable, "-c", animation]))
         server.wait(lambda: server.t("show-options", "-pqv", "-t", server.main, "@tmux_pane_tree_observed_title"), "⠿ Working")
         time.sleep(.15)

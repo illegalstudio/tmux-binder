@@ -130,7 +130,7 @@ def _without_notify(text: str, root: Path) -> str:
 
 
 def install_claude(configured: dict[str, Path], root: Path) -> None:
-    _grouped(configured["CLAUDE_SETTINGS"], "claude", root, ("SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "Notification", "PermissionRequest", "SessionEnd", "SubagentStart", "PostToolUse", "PostToolUseFailure"))
+    _grouped(configured["CLAUDE_SETTINGS"], "claude", root, ("SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "Notification", "PermissionRequest", "SessionEnd", "SubagentStart", "PostToolUse", "PostToolUseFailure", "StopFailure"))
 
 
 def install_codex(configured: dict[str, Path], root: Path) -> None:

@@ -22,7 +22,7 @@ EVENT_PENDING = "TMUX_BINDER_EVENTS_PENDING"
 RENAME_SOURCE = "@tmux_pane_tree_rename_format"
 SIDEBAR_RENAME_FORMAT = "#{?@tmux_sidebar_owned,#{window_name},#{E:" + RENAME_SOURCE + "}}"
 # Explicit members avoid locale-dependent Unicode range collation in tmux regexes.
-TITLE_FORMAT = "#{s/^[" + "".join(chr(code) for code in range(0x2800, 0x2900)) + "]/⠿/:pane_title}"
+TITLE_FORMAT = "#{s/^[" + "".join(chr(code) for code in (*range(0x2800, 0x2900), 0x25D0, 0x25D1)) + "]/⠿/:pane_title}"
 
 
 class Application:

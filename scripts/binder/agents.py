@@ -169,8 +169,6 @@ def effective_status(command: str, title: str, state: dict, captured_status: str
         title_status = claude_title_status(title)
         if title_status == "running" and status == "subagent-running":
             return status
-        if title_status == "idle":
-            return "" if status in {"running", "subagent-running"} else (status if status in ACTIVE_STATUSES else "")
         if title_status:
             return title_status
     return status if status in ACTIVE_STATUSES else ""
@@ -242,7 +240,7 @@ def parse_claude(payload: str) -> tuple[str, str, str]:
         status = "needs-input"
     elif event == "Stop":
         status = "done"
-    elif event == "PostToolUseFailure":
+    elif event in ("PostToolUseFailure", "StopFailure"):
         status = "error"
     else:
         status = ""
@@ -585,10 +583,11 @@ def claude_title_status(title: str) -> str:
             "needs-input": "needs-input",
             "running": "running",
         }.get(suffix, "")
-    if re.match(r"^[\u2800-\u28FF]", title.strip()):
+    # Claude animates Braille (older releases) or half-circle frames while
+    # working. Under a multiplexer current releases keep a static asterisk
+    # for every state, so the asterisk carries no idle information.
+    if re.match(r"^[\u2800-\u28FF\u25D0\u25D1]", title.strip()):
         return "running"
-    if title.strip().startswith("\u2733"):
-        return "idle"
     return ""
 
 

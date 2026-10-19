@@ -99,9 +99,9 @@ class SidebarRendering(unittest.TestCase):
                 third = server.t("split-window", "-dP", "-F", "#{pane_id}", "-t", second, "-v", "sleep 86400")
                 server.t("rename-window", "-t", server.window, "backend-with-a-name-that-does-not-fit")
                 server.t("set-option", "-g", "@tmux_pane_tree_width", "34")
-                for pane, app in ((server.main, "claude"), (second, "codex"), (third, "claude")):
+                for pane, title in ((server.main, "✳ Claude Code"), (second, "codex"), (third, "claude")):
                     server.t("set-option", "-p", "-t", pane, "allow-set-title", "off")
-                    server.t("select-pane", "-t", pane, "-T", app)
+                    server.t("select-pane", "-t", pane, "-T", title)
                 terminal = Terminal(server)
                 terminal.wait(lambda: server.t("display-message", "-pt", server.main, "#{session_attached}"), "1")
                 terminal.keys("\x02t")
