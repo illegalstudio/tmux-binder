@@ -35,16 +35,26 @@ minimum and current tmux versions and tests each with Python 3.10 and 3.14.
   Braille spinner frames are equivalent; entering or leaving that state is not.
   Use explicit regex members because Unicode ranges depend on server collation.
 - binder/agents.py normalizes all seven integrations and owns ordering,
-  subagent lifecycle and detection. Codex terminal probes run centrally.
+  subagent lifecycle and detection. Codex and Claude terminal probes run centrally.
   Cursor recognizes agent and cursor-agent commands, orders turns by
   generation_id and preserves stop/sessionEnd against late observational hooks.
   Stale Cursor state and titles must not keep a shell pane marked as active.
   Grok uses native camelCase payloads and the grok-native command. Ignore child
   completions, stale turn-end reports and duplicate Claude/Cursor compatibility
   invocations. Preserve explicit completion/error across Grok idle notifications.
-  Claude keeps a static title under tmux, so hooks own its state. Its idle
+  Claude keeps a static title under tmux. Hooks own its stored state, while the
+  live spinner footer above its input box can override stale completion. Exclude
+  auxiliary Tip rows and their wrapped text from that spinner block. Its idle
   notification clears only busy states, and a subagent stop without a tracked
-  start (its recap agent) never reopens a finished turn.
+  start (its recap agent) never reopens a finished turn. PreToolUse reopens tool
+  continuations before the tool finishes; untracked child tool hooks cannot
+  reopen a parent turn. Claude observers run synchronously to preserve lifecycle
+  order across completion and the next prompt without a native turn ID.
+- Native hook JSON arrives on stdin and may follow process startup. Read the
+  pipe through EOF; an input-readiness timeout can silently lose a new prompt.
+  Hooks with a JSON argument must not wait for stdin.
+- Print terminal-probe delimiters with display-message -l. A literal %pane ID
+  otherwise passes through strftime, padding multi-digit IDs and losing samples.
 - binder/installer.py owns optional agent config changes and backups. Migrate only
   recognized Binder-owned handlers, preserve foreign hooks and Codex trust state,
   and keep symlinks/file permissions during atomic writes. Installation/removal

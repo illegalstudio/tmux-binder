@@ -300,7 +300,7 @@ class Coordinator(unittest.TestCase):
             install(["claude", "codex", "cursor", "opencode", "pi", "grok"])
         env = {**server.env, "TMUX": f"{server.socket},{server.identity.server_pid},0", "TMUX_PANE": server.main}
         cases = {
-            "claude": [("UserPromptSubmit", {}, "running"), ("PermissionRequest", {}, "needs-input"), ("PostToolUse", {}, "running"), ("Stop", {}, "done"), ("Notification", {"notification_type": "idle_prompt"}, "done"), ("SubagentStop", {"agent_id": "recap"}, "done"), ("UserPromptSubmit", {}, "running"), ("StopFailure", {}, "error")],
+            "claude": [("UserPromptSubmit", {}, "running"), ("PermissionRequest", {}, "needs-input"), ("PostToolUse", {}, "running"), ("Stop", {}, "done"), ("Notification", {"notification_type": "idle_prompt"}, "done"), ("SubagentStop", {"agent_id": "recap"}, "done"), ("PreToolUse", {}, "running"), ("Stop", {}, "done"), ("UserPromptSubmit", {}, "running"), ("StopFailure", {}, "error")],
             "codex": [("UserPromptSubmit", {}, "running"), ("PermissionRequest", {}, "needs-input"), ("PostToolUse", {}, "running"), ("SubagentStart", {"agent_id": "child"}, "subagent-running"), ("SubagentStop", {"agent_id": "child"}, "running"), ("Stop", {}, "done")],
             "cursor": [("beforeSubmitPrompt", {}, "running"), ("postToolUseFailure", {"failure_type": "permission_denied"}, "needs-input"), ("postToolUse", {}, "running"), ("stop", {"status": "completed"}, "done")],
             "opencode": [("session.status", {"status": "running"}, "running"), ("permission.asked", {}, "needs-input"), ("session.idle", {}, "done")],

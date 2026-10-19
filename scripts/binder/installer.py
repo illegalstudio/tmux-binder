@@ -103,7 +103,9 @@ def _grouped(path: Path, app: str, root: Path, events: tuple[str, ...]) -> None:
 
 def _handler(app: str, root: Path, event: str) -> dict:
     entry = {"type": "command", "command": shlex.quote(str(root / f"scripts/features/hooks/hook-{app}.sh")), "timeout": 10}
-    if app != "grok" and event not in {"SessionStart", "SessionEnd"}:
+    # Claude has no turn ID. Await its short observer so a delayed Stop cannot
+    # overwrite the next prompt or a tool continuation.
+    if app not in {"claude", "grok"} and event not in {"SessionStart", "SessionEnd"}:
         entry["async"] = True
     return entry
 
@@ -130,7 +132,7 @@ def _without_notify(text: str, root: Path) -> str:
 
 
 def install_claude(configured: dict[str, Path], root: Path) -> None:
-    _grouped(configured["CLAUDE_SETTINGS"], "claude", root, ("SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "Notification", "PermissionRequest", "SessionEnd", "SubagentStart", "PostToolUse", "PostToolUseFailure", "StopFailure"))
+    _grouped(configured["CLAUDE_SETTINGS"], "claude", root, ("SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "SubagentStop", "Notification", "PermissionRequest", "SessionEnd", "SubagentStart", "PostToolUse", "PostToolUseFailure", "StopFailure"))
 
 
 def install_codex(configured: dict[str, Path], root: Path) -> None:

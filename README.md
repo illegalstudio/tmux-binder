@@ -198,6 +198,12 @@ This mode, and running the installer without `--agent`, configures **all seven i
 
 Codex uses native lifecycle events for working, permission requests, completion and delegated activity. Recognized legacy Binder `notify` callbacks are removed from `config.toml`; unrelated callbacks and hook trust metadata stay intact. Kiro's default agent changes only when it is missing or still a default.
 
+Claude hooks run in order so a completed turn cannot overwrite a new prompt's
+activity. Tool continuations restore activity before the command finishes.
+Binder also recognizes Claude's live spinner above its input box, so a missing
+hook cannot leave a completed badge while that activity indicator is visible.
+Run the installer again with `--agent claude` to update older async hooks.
+
 Cursor uses observational events and a neutral prompt response. Its integration does not install tool-permission handlers; permission-denied tool failures can report `needs-input`.
 
 Grok uses native lifecycle hooks and camelCase session metadata. Completion and

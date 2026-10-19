@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import re
-import select
 import subprocess
 import sys
 import time
@@ -55,7 +54,9 @@ def read_hook(arguments: list[str]) -> tuple[str, dict, str]:
         raw, event = second, first
     else:
         raw, event = "", first
-        if not sys.stdin.isatty() and select.select([sys.stdin], [], [], 0.05)[0]:
+        # Native hooks supply JSON on a pipe. The producer may write after
+        # our process starts, so wait for its payload instead of dropping it.
+        if not sys.stdin.isatty():
             raw = sys.stdin.read(1024 * 1024)
     try:
         payload = json.loads(raw) if raw.strip() else {}

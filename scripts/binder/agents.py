@@ -85,6 +85,10 @@ class AgentStore:
         if (explicit_subagent and event.get("app") not in {"claude", "codex"}) or ((event.get("delegated") or key in self.delegated) and status in {"done", "needs-input"}):
             return False
         previous = self.panes.get(pane, {})
+        # Child tools may outlive the parent turn (including recap work).
+        # Only a tracked child can update the parent's activity.
+        if event.get("app") == "claude" and normalized in {"pretooluse", "posttooluse", "posttoolusefailure", "permissionrequest"} and event.get("subagent_id") and event["subagent_id"] not in previous.get("subagent_ids", []):
+            return False
         if event.get("app") == "grok" and event.get("notification_type") == "idle_prompt" and previous.get("status") in {"done", "error"}:
             return False
         # Claude reports idle_prompt a minute after every turn. It clears a
@@ -159,7 +163,32 @@ class AgentStore:
         return True
 
 
-def terminal_status(capture: str) -> str:
+def terminal_status(capture: str, app: str = "codex") -> str:
+    if app == "claude":
+        lines = capture.splitlines()
+        for index in range(len(lines) - 1, -1, -1):
+            if not lines[index].lstrip().startswith("❯"):
+                continue
+            if index < 2 or not lines[index - 1].lstrip().startswith("───"):
+                return ""
+            index -= 2
+            while index >= 0 and not lines[index].strip():
+                index -= 1
+            block = []
+            while index >= 0 and lines[index].strip():
+                block.insert(0, lines[index].strip())
+                index -= 1
+            for index, line in enumerate(block):
+                if line.startswith("⎿"):
+                    block = block[:index]
+                    break
+            if len(block) > 4:
+                return ""
+            # Only Claude's live footer directly above its input box counts.
+            # Completed timers and quoted spinner text in the transcript do not.
+            status = " ".join(block)
+            return "running" if re.fullmatch(r"[*·✢✳✶✻✽\u2800-\u28ff]\s+[^\s.…]+(?:…|\.{3})(?:\s+\(.*\))?", status) else ""
+        return ""
     return "running" if re.search(r"^\s*[•·]\s+Working \([^)]*esc to interrupt\)\s*$", capture, re.MULTILINE) else ""
 
 
@@ -170,6 +199,8 @@ def effective_status(command: str, title: str, state: dict, captured_status: str
     status = str(state.get("status", "")).lower()
     if app == "codex":
         return captured_status or (status if status in ACTIVE_STATUSES else "")
+    if app == "claude" and captured_status:
+        return status if status == "subagent-running" else captured_status
     if status == "idle":
         return ""
     if app == "claude":
@@ -233,7 +264,7 @@ def parse_claude(payload: str) -> tuple[str, str, str]:
 
     if event in ("SessionStart", "SessionEnd"):
         status = "idle"
-    elif event in ("UserPromptSubmit", "PostToolUse"):
+    elif event in ("UserPromptSubmit", "PreToolUse", "PostToolUse"):
         status = "running"
     elif event == "SubagentStart":
         status = "running"

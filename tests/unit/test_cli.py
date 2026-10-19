@@ -7,10 +7,18 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
-from binder.cli import main
+from binder.cli import main, read_hook
 
 
 class HookCommands(unittest.TestCase):
+    def test_native_payload_is_read_from_stdin_without_an_event_argument(self):
+        raw = '{"hook_event_name":"UserPromptSubmit","session_id":"session"}'
+        with patch("sys.stdin", io.StringIO(raw)):
+            event, payload, original = read_hook([])
+        self.assertEqual(event, "")
+        self.assertEqual(payload["hook_event_name"], "UserPromptSubmit")
+        self.assertEqual(original, raw)
+
     def test_grok_compatibility_does_not_deliver_duplicate_claude_or_cursor_updates(self):
         with patch.dict(os.environ, {"GROK_HOOK_EVENT": "post_tool_use", "TMUX_PANE": "%1"}, clear=True), patch("binder.cli.Identity.resolve") as resolve:
             for app in ("claude", "cursor"):

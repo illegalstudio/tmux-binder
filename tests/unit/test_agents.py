@@ -149,6 +149,23 @@ class AgentEvents(unittest.TestCase):
         store.update("%1", normalize("claude", {"hook_event_name": "Notification", "notification_type": "idle_prompt"}), {})
         self.assertEqual(store.panes["%1"]["status"], "idle")
 
+    def test_claude_continuations_clear_previous_completion(self):
+        for resume in ("UserPromptSubmit", "PreToolUse"):
+            with self.subTest(resume=resume):
+                store = AgentStore()
+                for event in ("UserPromptSubmit", "Stop", resume):
+                    store.update("%1", normalize("claude", {"hook_event_name": event, "session_id": "s"}), {})
+                self.assertEqual(store.panes["%1"]["status"], "running")
+
+    def test_claude_untracked_child_tools_do_not_replace_parent_state(self):
+        for status in ("done", "error", "needs-input", "running"):
+            with self.subTest(status=status):
+                store = AgentStore()
+                store.update("%1", {"app": "claude", "status": status}, {})
+                for event in ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"):
+                    self.assertFalse(store.update("%1", normalize("claude", {"hook_event_name": event, "agent_id": "recap"}), {}))
+                self.assertEqual(store.panes["%1"]["status"], status)
+
     def test_turn_boundary_clears_missing_subagent_stop(self):
         store = AgentStore()
         store.update("%1", normalize("claude", {"hook_event_name": "SubagentStart"}), {})
@@ -216,3 +233,28 @@ class AgentEvents(unittest.TestCase):
         self.assertEqual(terminal_status(busy), "running")
         self.assertEqual(terminal_status("user quoted Working in a message"), "")
         self.assertEqual(effective_status("codex", "", {"status": "done"}, terminal_status(busy)), "running")
+
+    def test_claude_live_footer_overrides_stale_hook_completion(self):
+        for symbol in "*·✢✳✶✻✽⠋":
+            for ending in ("…", "..."):
+                capture = f"Earlier output\n\n{symbol} Onioning{ending} (13m 44s · ↓ 47.6k tokens)\n\n──── Piano ─\n❯ \n────────\n  Fable 5.1"
+                self.assertEqual(terminal_status(capture, "claude"), "running")
+        for status in ("done", "idle", "error", "needs-input", "running"):
+            self.assertEqual(effective_status("claude", "✳ Project", {"status": status}, "running"), "running")
+        self.assertEqual(effective_status("claude", "✳ Project", {"status": "subagent-running"}, "running"), "subagent-running")
+
+    def test_claude_terminal_probe_ignores_completion_quotes_and_permission_dialogs(self):
+        for capture in (
+            "✢ Onioning… (2s)\n\nAn answer quoting the spinner\n\n────────\n❯ \n────────",
+            "✢ Onioning… (2s)\n\n✻ Cooked for 2s · done 5:00 PM\n\n────────\n❯ \n────────",
+            "✢ Onioning… (2s)\n\nAllow this command?\n1. Yes\n2. No",
+            "❯ Explain the output\n✢ Onioning… (2s)",
+        ):
+            self.assertEqual(terminal_status(capture, "claude"), "")
+        wrapped = "✢ Onioning…\n(13m 44s · ↓ 47.6k tokens)\n\n────────\n❯ \n────────"
+        self.assertEqual(terminal_status(wrapped, "claude"), "running")
+
+    def test_claude_busy_footer_allows_auxiliary_tip_lines(self):
+        for tip in ("  ⎿  Tip: Share Claude Code · /passes", "  ⎿  Tip: a wrapped tip\nwith several\ncontinuation lines\nunder the spinner"):
+            capture = "· Razzmatazzing… (running Stop hooks… 1/2 · 18s · ↓ 626 tokens)\n" + tip + "\n\n──── Piano ─\n❯ \n────────"
+            self.assertEqual(terminal_status(capture, "claude"), "running")

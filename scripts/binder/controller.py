@@ -474,18 +474,23 @@ class Application:
     def sample_agents(self) -> None:
         if not self.is_open:
             return
-        targets = [pane_id for pane_id, pane in self.model.panes.items() if not pane["sidebar"] and live_agent_app(pane["pane_current_command"], pane["pane_title"], self.agents.panes.get(pane_id, {})) == "codex"]
+        targets = {}
+        for pane_id, pane in self.model.panes.items():
+            app = live_agent_app(pane["pane_current_command"], pane["pane_title"], self.agents.panes.get(pane_id, {}))
+            if not pane["sidebar"] and app in {"codex", "claude"}:
+                targets[pane_id] = app
         if not targets or not any(self.model.sidebar(window) and self.model.visible(window) for window in self.model.windows):
             return
         commands = []
         for pane_id in targets:
-            commands.extend([["display-message", "-p", "BINDER-CAPTURE:" + pane_id], ["capture-pane", "-p", "-t", pane_id]])
+            # Literal output keeps %607 from becoming a padded strftime field.
+            commands.extend([["display-message", "-p", "-l", "BINDER-CAPTURE:" + pane_id], ["capture-pane", "-p", "-t", pane_id]])
         output = self.tmux.batch(commands, required=False)
         captures = {}
         for section in output.split("BINDER-CAPTURE:")[1:]:
             pane_id, _, capture = section.partition("\n")
             if pane_id in targets:
-                captures[pane_id] = terminal_status(capture)
+                captures[pane_id] = terminal_status(capture, targets[pane_id])
         if captures != self.captures:
             self.captures = captures
             self.rows = project_rows(self.model, self.agents.panes, self.options, self.icons, self.badges, self.captures)

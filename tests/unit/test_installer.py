@@ -12,6 +12,28 @@ from binder.installer import DEFAULT_PATHS, install, remove
 
 
 class HookInstallation(unittest.TestCase):
+    def test_claude_migrates_async_observers_and_installs_tool_start(self):
+        with tempfile.TemporaryDirectory(prefix="binder-installer-") as directory:
+            configured = {key: str(Path(directory) / key) for key in DEFAULT_PATHS}
+            path = Path(configured["CLAUDE_SETTINGS"])
+            foreign = {"type": "command", "command": "CJ_RUST_HOOK=1 cj hook claude", "async": True}
+            old = {"type": "command", "command": "/plugin/binder/scripts/features/hooks/hook-claude.sh", "async": True}
+            path.write_text(json.dumps({"hooks": {event: [{"hooks": [foreign, old]}] for event in ("UserPromptSubmit", "PostToolUse", "Stop")}}))
+            with patch.dict(os.environ, {**configured, "PLUGIN_DST": "/plugin/binder"}):
+                install(["claude"])
+                first = path.read_text()
+                install(["claude"])
+            self.assertEqual(first, path.read_text())
+            hooks = json.loads(first)["hooks"]
+            self.assertIn("PreToolUse", hooks)
+            for event, groups in hooks.items():
+                handlers = [hook for group in groups for hook in group["hooks"]]
+                owned = [hook for hook in handlers if hook["command"] == old["command"]]
+                self.assertEqual(len(owned), 1, event)
+                self.assertNotIn("async", owned[0], event)
+                if event in ("UserPromptSubmit", "PostToolUse", "Stop"):
+                    self.assertIn(foreign, handlers)
+
     def test_grok_installs_native_observers_and_preserves_foreign_hooks(self):
         with tempfile.TemporaryDirectory(prefix="binder-installer-") as directory:
             configured = {key: str(Path(directory) / key) for key in DEFAULT_PATHS}
