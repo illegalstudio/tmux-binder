@@ -136,11 +136,15 @@ class Coordinator(unittest.TestCase):
         server.wait(lambda: server.identity.endpoint.exists(), False)
         if waiter:
             server.wait(lambda: Path(f"/proc/{waiter}").exists(), False)
-        # Drain an earlier wakeup, or terminate the isolated waiter if none is pending.
+        # Consume an earlier wakeup, or release the drain with a signal. Before
+        # tmux 3.8 a killed wait-for client, including the terminated
+        # coordinator waiter, stays queued and consumes the next signal.
+        drain = subprocess.Popen(["tmux", "-S", server.socket, "wait-for", channel], env=server.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            subprocess.run(["tmux", "-S", server.socket, "wait-for", channel], env=server.env, capture_output=True, check=True, timeout=.2)
+            drain.wait(timeout=.2)
         except subprocess.TimeoutExpired:
-            pass
+            server.t("wait-for", "-S", channel)
+            drain.wait(timeout=1)
         for count in (1, 2, 3, 4):
             with self.subTest(notifications=count):
                 server.t("set-environment", "-gh", EVENT_PENDING, "")
