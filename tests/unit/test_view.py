@@ -213,6 +213,27 @@ class Keyboard(unittest.TestCase):
         self.assertEqual(self.view.prompt["action"], "rename_session")
         self.assertEqual(self.view.prompt["text"], "work")
 
+    def test_window_movement_uses_the_selected_window_or_pane_and_skips_headings(self):
+        for row in self.rows:
+            with self.subTest(kind=row["kind"]):
+                self.view.outgoing.clear()
+                self.view.selected = row["key"]
+                self.view.user_scrolled = True
+                self.view.handle_key("K")
+                self.view.handle_key("J")
+                expected = [] if row["kind"] == "session" else [("move_window_up", row["key"]), ("move_window_down", row["key"])]
+                self.assertEqual([(item["action"], item["key"]) for item in self.commands()], expected)
+                self.assertEqual(self.view.user_scrolled, row["kind"] == "session")
+
+    def test_window_movement_waits_for_pending_navigation(self):
+        self.view.snapshot.update(live_preview=True, focused=True)
+        self.view.handle_key("j")
+        self.view.handle_key("J")
+        self.assertEqual(self.view.deferred_keys, ["J"])
+        self.navigation_reply()
+        self.assertEqual(self.commands()[-1]["action"], "move_window_down")
+        self.assertEqual(self.commands()[-1]["key"], self.view.selected)
+
     def test_closing_and_focus_commands(self):
         self.view.handle_key("\x0c")
         self.view.handle_key("q")

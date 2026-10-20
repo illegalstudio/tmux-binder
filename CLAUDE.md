@@ -114,6 +114,14 @@ minimum and current tmux versions and tests each with Python 3.10 and 3.14.
   legacy session collapses when restoring view state or accepting a preview handoff.
   Default rename keys are r for the selected window and R for its session.
   Both old rw/rs bindings remain configurable explicitly without prefix conflicts.
+- Window order uses numeric indices for each session, including linked windows.
+  J/K and context-menu movement swap adjacent visible windows within that session
+  using session-qualified stable window IDs. swap-window -d activates its source:
+  use it with the current window as source only when that window is in the pair.
+  Swapping two nonactive windows omits -d. Pane selections
+  move their containing window. Preserve selection, focus, branches and processes;
+  stop at session boundaries and retain filtered windows at their current indices.
+  Observe after-swap-window where supported, alongside the native topology hooks.
 - Window branches start collapsed. Persist explicit window expansions and transfer
   them with preview state so snapshots do not close branches the user opened.
   Retain pane rows in compact projections so expansion and search can reveal them.

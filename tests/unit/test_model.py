@@ -10,7 +10,7 @@ from binder.tmux import SCHEMAS
 
 
 def row(kind: str, **values) -> dict:
-    return {field: str(values.get(field, "")) for field in SCHEMAS[kind]}
+    return {field: str(values.get(field, "0" if field == "window_index" else "")) for field in SCHEMAS[kind]}
 
 
 def sample() -> Model:
@@ -90,6 +90,7 @@ class TreeProjection(unittest.TestCase):
     def test_window_summaries_include_filtered_panes_without_double_counting_links(self):
         self.model.panes["%1"].update(pane_current_command="codex", pane_title="codex")
         self.model.windows["@0"]["links"].append("$1")
+        self.model.windows["@0"]["indices"]["$1"] = "1"
         rows = self.project({"%0": {"app": "claude", "status": "running"}, "%1": {"app": "codex", "status": "needs-input"}}, filter="claude")
         windows = [row for row in rows if row["kind"] == "window"]
         self.assertEqual(len(windows), 2)
@@ -132,10 +133,19 @@ class TreeProjection(unittest.TestCase):
 
     def test_linked_windows_have_distinct_row_keys(self):
         self.model.windows["@0"]["links"].append("$1")
+        self.model.windows["@0"]["indices"]["$1"] = "1"
         rows = self.project()
         copies = [row for row in rows if row.get("pane_id") == "%0"]
         self.assertEqual(len(copies), 2)
         self.assertNotEqual(copies[0]["key"], copies[1]["key"])
+
+    def test_linked_windows_follow_numeric_indices_in_each_session(self):
+        for window in self.model.windows.values():
+            window["links"] = ["$0", "$1"]
+        self.model.windows["@0"]["indices"] = {"$0": "10", "$1": "2"}
+        self.model.windows["@1"]["indices"] = {"$0": "2", "$1": "10"}
+        rows = self.project()
+        self.assertEqual([item["key"] for item in rows if item["kind"] == "window"], ["$0/@1", "$0/@0", "$1/@0", "$1/@1"])
 
     def test_projection_never_calls_tmux_or_reads_files(self):
         with patch("subprocess.run", side_effect=AssertionError("unexpected subprocess")), patch("pathlib.Path.read_text", side_effect=AssertionError("unexpected file read")):

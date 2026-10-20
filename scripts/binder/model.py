@@ -125,6 +125,7 @@ def project_rows(model: Model, states: dict[str, dict], options: dict[str, str],
             if panes:
                 windows.append((window, content, panes))
         if windows:
+            windows.sort(key=lambda item: int(item[0]["indices"][session["session_id"]]))
             groups.append((session, windows))
     rows = []
     for si, (session, windows) in enumerate(groups):

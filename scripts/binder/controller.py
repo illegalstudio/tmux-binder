@@ -831,6 +831,7 @@ class Application:
             "window-layout-changed": "layout", "after-resize-pane": "resize", "session-created": "structure",
             "session-closed": "structure", "session-renamed": "structure", "window-linked": "structure", "window-unlinked": "structure",
             "window-renamed": "structure", "after-split-window": "structure",
+            "after-swap-window": "structure",
             "after-kill-pane": "structure", "pane-died": "structure", "pane-exited": "structure",
             "pane-title-changed": "metadata", "client-resized": "layout", "window-resized": "layout", "window-pane-changed": "focus",
             "after-set-option": "configuration", "after-new-window": "structure",
@@ -917,13 +918,35 @@ class Application:
                 args.extend(["Detach Session", "d", callback("detach", "menu-action")])
             else:
                 args.extend(["Split Horizontal", "h", callback("split_horizontal", "menu-action"), "Split Vertical", "v", callback("split_vertical", "menu-action")])
+                args.extend(["Move Window Up", "K", callback("move_window_up"), "Move Window Down", "J", callback("move_window_down")])
                 if row["kind"] == "pane" or row.get("pane_id", "").startswith("%"):
                     args.extend(["Zoom / Unzoom", "z", callback("zoom", "menu-action"), "Break to Window", "b", callback("break_window", "menu-action"), "Mark / Unmark", "M", callback("mark", "menu-action")])
             args.extend(["Close", "x", callback("confirm_close")])
         args.extend(["New Window", "w", callback("add_window"), "New Session", "n", callback("add_session"), "Refresh", "R", callback("refresh"), "Close Sidebar", "q", callback("close")])
         self.tmux.spawn(*args)
 
+    def move_window(self, row: dict, offset: int) -> None:
+        if row["kind"] == "session":
+            return
+        session, window = row["session_id"], row["window"]
+        windows = [item["window"] for item in self.rows if item["kind"] == "window" and item["session_id"] == session]
+        destination = windows.index(window) + offset
+        if not 0 <= destination < len(windows):
+            return
+        target = windows[destination]
+        current = self.model.sessions[session]["window_id"]
+        # -d activates the source. Use it only to retain the current window.
+        if current == target:
+            window, target = target, window
+        flags = ["-d"] if current == window else []
+        # Qualify stable window IDs by session so other links retain their order.
+        self.tmux.run("swap-window", *flags, "-s", session + ":" + window, "-t", session + ":" + target)
+        self.refresh()
+
     def menu_action(self, action: str, row: dict, client: str = "") -> None:
+        if action in {"move_window_up", "move_window_down"}:
+            self.move_window(row, -1 if action == "move_window_up" else 1)
+            return
         if action == "detach" and row["kind"] == "session":
             self.tmux.run("detach-client", "-s", row["session_id"])
         else:

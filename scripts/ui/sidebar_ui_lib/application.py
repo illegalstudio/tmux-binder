@@ -258,6 +258,9 @@ class View:
             self.preview_dirty = False
             self.preview_waiting = False
             self.send("activate", key=row["key"])
+        elif action in {"move_window_up", "move_window_down"} and row and row["kind"] != "session":
+            self.user_scrolled = False
+            self.send("menu-action", action=action, key=row["key"])
         elif action in {"add_window", "add_session", "rename_window", "rename_session", "rename"} and row:
             if action == "rename":
                 action = "rename_session" if row["kind"] == "session" else "rename_window"

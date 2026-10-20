@@ -12,6 +12,7 @@ SHORTCUTS = {
     "add_window": "aw", "add_session": "as", "go_top": "gg", "go_bottom": "G",
     "jump_back": "C-o", "jump_forward": "C-i", "rename_session": "R",
     "rename_window": "r", "close_pane": "x", "toggle_filter": "f",
+    "move_window_up": "K", "move_window_down": "J",
 }
 
 
