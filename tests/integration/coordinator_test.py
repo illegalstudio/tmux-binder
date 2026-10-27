@@ -15,12 +15,13 @@ from pathlib import Path
 
 from binder.runtime import Identity, request
 from binder.controller import EVENT_CHANNEL, EVENT_PENDING
+from binder.tmux import Tmux
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class Harness:
-    def __init__(self, directory: Path, state: Path | None = None) -> None:
+    def __init__(self, directory: Path, state: Path | None = None, session: bool = True) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         self.directory = directory
         self.socket = str(directory / "s")
@@ -28,7 +29,10 @@ class Harness:
         self.env = {**os.environ, "TMUX_PANE_TREE_STATE_DIR": str(self.state), "TMUX_PANE_TREE_FONT_DIRS": str(directory / "fonts"), "PYTHONDONTWRITEBYTECODE": "1"}
         self.env.pop("TMUX", None)
         self.env.pop("TMUX_PANE", None)
-        self.t("new-session", "-d", "-s", "work", "-n", "editor", "sleep 86400")
+        if session:
+            self.t("new-session", "-d", "-s", "work", "-n", "editor", "sleep 86400")
+        else:
+            self.t("start-server", ";", "set-option", "-s", "exit-empty", "off")
         self.t("set-environment", "-g", "TMUX_PANE_TREE_STATE_DIR", str(self.state))
         self.t("set-environment", "-g", "TMUX_PANE_TREE_FONT_DIRS", str(directory / "fonts"))
         self.t("set-option", "-g", "@tmux_pane_tree_icon_theme", "ascii")
@@ -36,8 +40,8 @@ class Harness:
         pid = int(self.t("display-message", "-p", "#{pid}"))
         key = hashlib.sha256(os.fsencode(self.socket)).hexdigest()[:16]
         self.identity = Identity(self.socket, pid, self.state / "servers" / f"{key}-{pid}", self.state / "preferences" / f"{key}.json")
-        self.main = self.t("display-message", "-p", "-t", "work", "#{pane_id}")
-        self.window = self.t("display-message", "-p", "-t", self.main, "#{window_id}")
+        self.main = self.t("display-message", "-p", "-t", "work", "#{pane_id}") if session else ""
+        self.window = self.t("display-message", "-p", "-t", self.main, "#{window_id}") if session else ""
         self.api("configure")
 
     def t(self, *args: str) -> str:
@@ -98,11 +102,11 @@ class Coordinator(unittest.TestCase):
         for server in self.servers:
             server.close()
 
-    def server(self, suffix="", state=None):
+    def server(self, suffix="", state=None, session=True):
         server = Harness.__new__(Harness)
         self.servers.append(server)
         short = hashlib.sha256((self._testMethodName + suffix).encode()).hexdigest()[:8]
-        server.__init__(self.root / short, state)
+        server.__init__(self.root / short, state, session)
         return server
 
     def test_concurrent_clients_use_one_coordinator(self):
@@ -152,6 +156,24 @@ class Coordinator(unittest.TestCase):
                     server.t("set-hook", "-R", "-g", "after-set-option")
                 subprocess.run(["tmux", "-S", server.socket, "wait-for", channel], env=server.env, capture_output=True, check=True, timeout=1)
                 self.assertNotIn(EVENT_PENDING + "=", server.t("show-environment", "-g"))
+
+    def test_coordinator_starts_before_the_first_session(self):
+        # A configuration that blocks after sourcing the plugin starts the
+        # coordinator before tmux creates its first session.
+        server = self.server(session=False)
+        doctor = server.api("doctor")
+        self.assertEqual((doctor["windows"], doctor["clients"], doctor["errors"]), (0, 0, {}))
+        self.assertTrue(any("binder.py" in line and " t " in line for line in server.t("list-keys", "-T", "prefix").splitlines()))
+        server.t("new-session", "-d", "-s", "work", "-n", "editor", "sleep 86400")
+        server.wait(lambda: server.api("doctor")["windows"], 1)
+        server.main = server.t("display-message", "-p", "-t", "work", "#{pane_id}")
+        server.window = server.t("display-message", "-p", "-t", server.main, "#{window_id}")
+        server.open()
+        server.t("kill-session", "-t", "work")
+        server.wait(lambda: server.api("doctor")["windows"], 0)
+        server.t("new-session", "-d", "-s", "next", "-n", "logs", "sleep 86400")
+        server.wait(lambda: server.api("doctor")["views"], 1)
+        self.assertEqual({key: server.api("doctor")[key] for key in ("pid", "open", "errors")}, {"pid": doctor["pid"], "open": True, "errors": {}})
 
     def test_global_state_reaches_future_sessions(self):
         server = self.server()
@@ -239,6 +261,14 @@ class Coordinator(unittest.TestCase):
         self.assertTrue(any(row.get("name") == name for row in server.api("snapshot")["rows"]))
         self.assertEqual(server.t("list-windows", "-a", "-F", "#{window_name}"), name)
         self.assertEqual(len(server.api("snapshot")["rows"]), 3)
+
+    def test_live_pane_commands_and_paths_are_transported_without_corruption(self):
+        server = self.server()
+        path = server.directory / 'a;b\\c\n界 "q" $x=%'
+        path.mkdir()
+        pane = server.t("split-window", "-d", "-P", "-F", "#{pane_id}", "-c", str(path), "-t", server.main, "sleep 86400")
+        read = lambda: next((row["pane_current_command"], row["pane_current_path"]) for row in Tmux(server.socket).snapshot()["P"] if row["pane_id"] == pane)
+        server.wait(read, ("sleep", str(path)))
 
     def test_out_of_order_and_parallel_agent_updates_are_serialized(self):
         server = self.server()

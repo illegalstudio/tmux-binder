@@ -18,7 +18,12 @@ minimum and current tmux versions and tests each with Python 3.10 and 3.14.
   PID. Socket-specific preferences survive server restarts.
 - binder/tmux.py groups commands through source-file stdin with explicit quoting.
   Snapshot fields use byte-length prefixes, so names may contain separators,
-  quotes, Unicode and newlines.
+  quotes, Unicode and newlines. Current command and path are read from the OS
+  on every expansion and can change while a pane execs: use one q: expansion
+  ending at an unescaped semicolon, never a separately expanded length.
+  A server without sessions is an empty model. Server-wide pane, window and
+  client listings fail with "no current target" there, so guard them with
+  server_sessions inside the same batch.
 - binder/controller.py owns application state and mutations. Tmux owns the real
   topology. binder/model.py projects cached data into tree rows without I/O.
 - binder/server.py serializes commands, coalesces notifications, broadcasts

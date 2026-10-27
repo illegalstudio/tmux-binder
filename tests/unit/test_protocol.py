@@ -10,11 +10,21 @@ from unittest.mock import patch
 from binder.config import SHORTCUTS, enabled, integer, option, parse_options, shortcuts, visuals
 from binder.controller import Application
 from binder.runtime import MAX_MESSAGE, Identity, atomic_json, decode, encode, read_json
-from binder.tmux import SCHEMAS, parse_records
+from binder.tmux import SCHEMAS, VOLATILE, parse_records
 
 
-def record(kind: str, values: list[str]) -> bytes:
-    return kind.encode() + b"".join(str(len(value.encode())).encode() + b":" + value.encode() for value in values) + b"\n"
+# Characters escaped by tmux's q: modifier in 3.8; 3.5 omits braces, newlines and tabs.
+SHELL_QUOTED = "|&;<>(){}$`\\\"'*?[# =%\n\t"
+
+
+def field(name: str, value: str, escaped: str = SHELL_QUOTED) -> bytes:
+    if name in VOLATILE:
+        return "".join("\\" + character if character in escaped else character for character in value).encode() + b";"
+    return str(len(value.encode())).encode() + b":" + value.encode()
+
+
+def record(kind: str, values: list[str], escaped: str = SHELL_QUOTED) -> bytes:
+    return kind.encode() + b"".join(field(name, value, escaped) for name, value in zip(SCHEMAS[kind], values, strict=True)) + b"\n"
 
 
 class Protocol(unittest.TestCase):
@@ -34,13 +44,21 @@ class Protocol(unittest.TestCase):
         parsed = parse_records(record("P", list(data.values())))
         self.assertEqual(parsed["P"], [data])
 
+    def test_volatile_fields_decode_quoted_values_from_every_tmux_release(self):
+        data = {key: "" for key in SCHEMAS["P"]}
+        data.update(pane_id="%1", window_id="@2", pane_current_command="a;b\\", pane_current_path='/tmp/x;y\\z\n界 "q" {t}\t$%', pane_title="title")
+        for escaped in (SHELL_QUOTED.translate(str.maketrans("", "", "{}\n\t")), SHELL_QUOTED):
+            with self.subTest(escaped=escaped):
+                self.assertEqual(parse_records(record("P", list(data.values()), escaped))["P"], [data])
+
     def test_multiple_record_types_and_linked_windows(self):
         raw = record("S", ["$0", "one", "0", "@0"]) + record("S", ["$1", "two", "1", "@2"])
         parsed = parse_records(raw)
         self.assertEqual(len(parsed["S"]), 2)
 
     def test_malformed_records_are_rejected(self):
-        for raw in (b"X", b"Pno:", b"P100:short", record("S", ["$0", "one", "0", "@0"])[:-1]):
+        unterminated = b"P2:%12:@1sleep\\;"
+        for raw in (b"X", b"Pno:", b"P100:short", record("S", ["$0", "one", "0", "@0"])[:-1], unterminated):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 parse_records(raw)
 

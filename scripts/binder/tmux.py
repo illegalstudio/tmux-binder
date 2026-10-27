@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 import logging
@@ -12,10 +13,20 @@ SCHEMAS = {
     "C": ("client_name", "client_pid", "session_id", "window_id", "pane_id", "client_activity", "client_flags"),
     "G": ("pid", "@tmux_sidebar_enabled", "@tmux_sidebar_main_pane", "pane-active-border-style", "pane-border-style", "status-style", "pane-border-format", "@tmux_pane_tree_resized_pane", "@tmux_pane_tree_focus_pane", "@tmux_pane_tree_focus_client", "window-status-current-style", "window-status-style", "@tmux_pane_tree_auto_resize"),
 }
+# tmux reads these from the operating system on every expansion, so a length
+# prefix can describe another value while a pane execs its command. They use
+# one shell-quoted expansion that ends at an unescaped semicolon instead.
+VOLATILE = frozenset({"pane_current_command", "pane_current_path"})
+QUOTED_FIELD = re.compile(rb"((?:\\.|[^\\;])*);", re.DOTALL)
+QUOTED_CHARACTER = re.compile(rb"\\(.)", re.DOTALL)
+
+
+def field_format(key: str) -> str:
+    return "#{q:" + key + "};" if key in VOLATILE else "#{n:" + key + "}:#{" + key + "}"
 
 
 def record_format(kind: str) -> str:
-    return kind + "".join("#{n:" + key + "}:#{" + key + "}" for key in SCHEMAS[kind])
+    return kind + "".join(field_format(key) for key in SCHEMAS[kind])
 
 
 def parse_records(raw: bytes) -> dict[str, list[dict[str, str]]]:
@@ -28,6 +39,13 @@ def parse_records(raw: bytes) -> dict[str, list[dict[str, str]]]:
         offset += 1
         row = {}
         for name in SCHEMAS[kind]:
+            if name in VOLATILE:
+                quoted = QUOTED_FIELD.match(raw, offset)
+                if quoted is None:
+                    raise ValueError(f"Unterminated quoted tmux record {kind}.{name} at {offset}: {raw[offset:offset + 80]!r}")
+                row[name] = QUOTED_CHARACTER.sub(rb"\1", quoted[1]).decode("utf-8", errors="replace")
+                offset = quoted.end()
+                continue
             end = raw.find(b":", offset)
             if end < 0 or not raw[offset:end].isdigit():
                 raise ValueError(f"Invalid length in tmux record {kind}.{name} at {offset}: {raw[offset:offset + 80]!r}")
@@ -48,10 +66,22 @@ class TmuxError(RuntimeError):
     pass
 
 
+def quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + '"'
+
+
+def command_line(command: list[str]) -> str:
+    return " ".join(quote(str(value)) for value in command)
+
+
 def command_script(commands: list[list[str]]) -> bytes:
-    def quote(value: str) -> str:
-        return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + '"'
-    return ("\n".join(" ".join(quote(str(value)) for value in command) for command in commands) + "\n").encode()
+    return ("\n".join(command_line(command) for command in commands) + "\n").encode()
+
+
+def with_sessions(command: list[str]) -> list[str]:
+    # Server-wide listings still resolve a current target, which fails with
+    # "no current target" before the first session exists.
+    return ["if-shell", "-F", "#{server_sessions}", command_line(command)]
 
 
 @dataclass
@@ -85,10 +115,10 @@ class Tmux:
 
     def snapshot(self) -> dict[str, list[dict[str, str]]]:
         commands = [
-            ["list-panes", "-a", "-F", record_format("P")],
-            ["list-windows", "-a", "-F", record_format("W")],
+            with_sessions(["list-panes", "-a", "-F", record_format("P")]),
+            with_sessions(["list-windows", "-a", "-F", record_format("W")]),
             ["list-sessions", "-F", record_format("S")],
-            ["list-clients", "-F", record_format("C")],
+            with_sessions(["list-clients", "-F", record_format("C")]),
             ["display-message", "-p", record_format("G")],
         ]
         return parse_records(self.execute(commands))
