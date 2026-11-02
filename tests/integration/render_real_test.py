@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import fcntl
+import os
+import signal
+import struct
 import tempfile
+import termios
 import unittest
 import re
 from pathlib import Path
@@ -10,6 +15,36 @@ from live_preview_real_test import Terminal
 
 
 class SidebarRendering(unittest.TestCase):
+    def test_client_resize_redraws_labels_without_keyboard_input(self):
+        with tempfile.TemporaryDirectory(prefix="binder-client-resize-") as directory:
+            server = Harness(Path(directory))
+            terminal = None
+            try:
+                server.t("set-option", "-g", "default-terminal", "tmux-256color")
+                server.t("rename-window", "-t", server.window, "backend-window")
+                terminal = Terminal(server)
+                terminal.wait(lambda: server.t("display-message", "-pt", server.main, "#{session_attached}"), "1")
+                terminal.keys("\x02t")
+                terminal.wait(lambda: bool(server.sidebar(server.window)))
+                sidebar = server.sidebar(server.window)
+                terminal.wait(lambda: "backend" in server.t("capture-pane", "-pt", sidebar))
+                content_pid = server.t("display-message", "-pt", server.main, "#{pane_pid}")
+
+                for rows, columns in ((12, 36), (36, 154), (59, 249), (30, 120)):
+                    with self.subTest(rows=rows, columns=columns):
+                        fcntl.ioctl(terminal.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+                        os.kill(terminal.client.pid, signal.SIGWINCH)
+                        terminal.wait(lambda: server.t("display-message", "-pt", sidebar, "#{window_width}x#{window_height}"), f"{columns}x{rows - 1}")
+                        terminal.wait(lambda: "backend" in server.t("capture-pane", "-pt", sidebar))
+                        self.assertEqual(server.sidebar(server.window), sidebar)
+                        self.assertEqual(server.t("display-message", "-pt", server.main, "#{pane_pid}"), content_pid)
+                self.assertEqual(server.t("show-options", "-gqv", "@tmux_pane_tree_width"), "")
+                self.assertEqual(server.t("display-message", "-pt", sidebar, "#{pane_width}"), "25")
+            finally:
+                if terminal is not None:
+                    terminal.close()
+                server.close()
+
     def test_explicit_sidebar_resize_wins_over_coalesced_window_resizes(self):
         with tempfile.TemporaryDirectory(prefix="binder-manual-width-") as directory:
             server = Harness(Path(directory))

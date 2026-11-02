@@ -1,18 +1,39 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import curses
 import os
 import select
+import signal
 import socket
 import sys
 import time
+from typing import Iterator
 
 from binder.config import SHORTCUTS
 from binder.runtime import MAX_MESSAGE, Identity, connect, decode, encode, request
 
 from .render import Renderer, colors
 from .view import clusters, control_key, ensure_visible, navigable, selection_for, shortcut_step, visible_rows
+
+
+@contextmanager
+def resize_events() -> Iterator[socket.socket]:
+    # Wake select on SIGWINCH without calling curses from a signal handler.
+    reader, writer = socket.socketpair()
+    with reader, writer:
+        reader.setblocking(False)
+        writer.setblocking(False)
+        previous_handler = signal.signal(signal.SIGWINCH, lambda *_: None)
+        try:
+            previous_fd = signal.set_wakeup_fd(writer.fileno())
+            try:
+                yield reader
+            finally:
+                signal.set_wakeup_fd(previous_fd)
+        finally:
+            signal.signal(signal.SIGWINCH, previous_handler)
 
 
 class View:
@@ -473,6 +494,21 @@ class View:
             self.preview_dirty = False
         self.dirty = False
 
+    def read_keys(self) -> None:
+        while True:
+            try:
+                key = self.screen.get_wch()
+            except curses.error:
+                return
+            self.handle_key(key)
+
+    def resize(self) -> None:
+        size = os.get_terminal_size(sys.stdin.fileno())
+        if self.screen.getmaxyx() != (size.lines, size.columns):
+            curses.resizeterm(size.lines, size.columns)
+        self.renderer.invalidate()
+        self.dirty = True
+
     def run(self) -> None:
         self.screen.keypad(True)
         self.screen.nodelay(True)
@@ -487,11 +523,17 @@ class View:
         curses.mousemask(curses.ALL_MOUSE_EVENTS | getattr(curses, "REPORT_MOUSE_POSITION", 0))
         # Zero can discard clicks batched in the same read; keep aggregation minimal.
         curses.mouseinterval(1)
+        with resize_events() as resized:
+            self.event_loop(resized)
+
+    def event_loop(self, resized: socket.socket) -> None:
         self.reconnect()
         sys.stdout.write("\x1b[?1003h")
         sys.stdout.flush()
         try:
+            self.resize()
             while self.running:
+                self.read_keys()
                 now = time.monotonic()
                 if self.hover_until and now >= self.hover_until:
                     self.hover("")
@@ -503,7 +545,10 @@ class View:
                 assert self.channel is not None
                 deadlines = [deadline for deadline in (self.hover_until, self.notice_until if self.notice else 0) if deadline]
                 timeout = max(0, min(deadlines) - time.monotonic()) if deadlines else None
-                readable, writable, _ = select.select([sys.stdin.fileno(), self.channel], [self.channel] if self.outgoing else [], [], timeout)
+                readable, writable, _ = select.select([sys.stdin.fileno(), self.channel, resized], [self.channel] if self.outgoing else [], [], timeout)
+                if resized in readable:
+                    resized.recv(4096)
+                    self.resize()
                 try:
                     if self.channel in writable and self.outgoing:
                         sent = self.channel.send(self.outgoing)
@@ -523,13 +568,6 @@ class View:
                     self.notice = "Reconnecting…"
                     self.dirty = True
                     self.reconnect()
-                if sys.stdin.fileno() in readable:
-                    while True:
-                        try:
-                            key = self.screen.get_wch()
-                        except curses.error:
-                            break
-                        self.handle_key(key)
         finally:
             sys.stdout.write("\x1b[?1003l")
             sys.stdout.flush()
