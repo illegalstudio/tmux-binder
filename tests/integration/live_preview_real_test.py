@@ -94,6 +94,8 @@ class LivePreview(unittest.TestCase):
                 for index in range(1, 5):
                     windows.append(server.t("new-session", "-dP", "-F", "#{window_id}", "-s", f"session{index}", "-n", f"step{index}", "sleep 86400"))
                 server.t("set-option", "-g", "@tmux_pane_tree_session_order", "work,session1,session2,session3,session4")
+                # Injected key bursts must exercise bindings rather than paste detection.
+                server.t("set-option", "-g", "assume-paste-time", "0")
                 server.t("bind-key", "-n", "C-h", "select-pane", "-L")
                 server.t("bind-key", "-n", "C-l", "select-pane", "-R")
                 terminal = Terminal(server)
