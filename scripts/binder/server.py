@@ -96,6 +96,25 @@ class Server:
             pass
         peer.channel.close()
 
+    def reconcile_navigation(self) -> None:
+        app = self.application
+        assert app is not None
+        pending = set(self.previews) | {item["client"] for item in app.navigations}
+        for client, state in list(self.navigation_inputs.items()):
+            current = app.model.clients.get(client, {})
+            pane = app.model.panes.get(current.get("pane_id", ""), {})
+            row = next((row for row in app.rows if row["key"] == state.get("selected")), {})
+            window = row.get("window") or app.model.sessions.get(row.get("session_id", ""), {}).get("window_id")
+            same_window = current.get("session_id") == row.get("session_id") and current.get("window_id") == window
+            if pane.get("sidebar") and (client in pending or same_window):
+                continue
+            # Native tmux focus changes end browsing just like Binder's focus keys.
+            self.navigation_inputs.pop(client)
+            self.previews.pop(client, None)
+            app.navigations = [item for item in app.navigations if item["client"] != client]
+            app.preview_states = {pid: value for pid, value in app.preview_states.items() if value.get("client") != client}
+            app.publish()
+
     def flush_events(self) -> None:
         if not self.events or self.application is None:
             return
@@ -110,7 +129,7 @@ class Server:
         app.last_event = events[-1].get("kind", "structure")
         app.events += len(events)
         app.refresh()
-        self.navigation_inputs = {client: state for client, state in self.navigation_inputs.items() if client in app.model.clients}
+        self.reconcile_navigation()
         acknowledged = False
         for event in events:
             if event.get("kind") != "focus":

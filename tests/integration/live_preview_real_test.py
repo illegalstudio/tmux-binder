@@ -84,6 +84,53 @@ class Terminal:
 
 
 class LivePreview(unittest.TestCase):
+    def test_native_focus_after_session_switch_reanchors_navigation(self):
+        with tempfile.TemporaryDirectory(prefix="binder-focus-anchor-") as directory:
+            server = Harness(Path(directory))
+            terminal = None
+            try:
+                server.t("rename-window", "-t", server.window, "step0")
+                windows = [server.window]
+                for index in range(1, 5):
+                    windows.append(server.t("new-session", "-dP", "-F", "#{window_id}", "-s", f"session{index}", "-n", f"step{index}", "sleep 86400"))
+                server.t("set-option", "-g", "@tmux_pane_tree_session_order", "work,session1,session2,session3,session4")
+                server.t("bind-key", "-n", "C-h", "select-pane", "-L")
+                server.t("bind-key", "-n", "C-l", "select-pane", "-R")
+                terminal = Terminal(server)
+                terminal.wait(lambda: server.t("display-message", "-pt", server.main, "#{session_attached}"), "1")
+                terminal.keys("\x02t")
+                terminal.wait(lambda: bool(server.sidebar(windows[-1])))
+                client = server.t("list-clients", "-F", "#{client_name}")
+
+                def selected():
+                    return next((line for line in terminal.frame().splitlines() if line.startswith("▶")), "")
+
+                for mode, target, key, expected in (("native", 3, "j", 4), ("native", 3, "k", 2), ("sidebar", 0, "j", 1), ("binder", 3, "j", 4)):
+                    with self.subTest(mode=mode, key=key):
+                        server.t("select-pane", "-t", server.main)
+                        server.t("switch-client", "-c", client, "-t", "work")
+                        terminal.keys("\x02T")
+                        terminal.wait(lambda: terminal.location()[2], server.sidebar(server.window))
+                        terminal.keys("ggj")
+                        terminal.wait(lambda: terminal.location()[1], windows[1])
+                        terminal.keys("\x0c")
+                        terminal.wait(lambda: terminal.location()[2] != server.sidebar(windows[1]))
+                        content = next(line.split("|")[0] for line in server.t("list-panes", "-t", windows[target], "-F", "#{pane_id}|#{@tmux_sidebar_owned}").splitlines() if not line.endswith("|1"))
+                        server.t("select-pane", "-t", server.sidebar(windows[target]) if mode == "sidebar" else content)
+                        server.t("switch-client", "-c", client, "-t", f"session{target}" if target else "work")
+                        terminal.wait(lambda: terminal.location()[1], windows[target])
+                        if mode != "sidebar":
+                            terminal.keys("\x08" if mode == "native" else "\x02T")
+                        terminal.wait(lambda: terminal.location()[2], server.sidebar(windows[target]))
+                        terminal.wait(lambda: f"step{target}" in selected())
+                        terminal.keys(key)
+                        terminal.wait(lambda: terminal.location()[1], windows[expected])
+                        terminal.wait(lambda: f"step{expected}" in selected())
+            finally:
+                if terminal is not None:
+                    terminal.close()
+                server.close()
+
     def test_held_navigation_keeps_each_step_across_window_handoffs(self):
         with tempfile.TemporaryDirectory(prefix="binder-preview-repeat-") as directory:
             server = Harness(Path(directory))

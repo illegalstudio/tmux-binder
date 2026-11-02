@@ -18,10 +18,15 @@ class NavigationOrdering(unittest.TestCase):
             session, window = f"${index}", f"${index}/@{index}"
             rows.extend([
                 {"key": session, "kind": "session"},
-                {"key": window, "kind": "window"},
+                {"key": window, "kind": "window", "session_id": session, "window": f"@{index}"},
                 {"key": window + f"/%{index}", "parent": window, "kind": "pane"},
             ])
-        self.server.application = SimpleNamespace(rows=rows, latest_preview={}, navigations=[], is_open=True, model=SimpleNamespace(panes={"%9": {}, "%10": {}}), client_for=lambda pane, client: client)
+        model = SimpleNamespace(
+            panes={"%9": {"sidebar": True}, "%10": {"sidebar": True}, "%0": {"sidebar": False}},
+            clients={"client": {"pane_id": "%9", "session_id": "$0", "window_id": "@0"}},
+            sessions={},
+        )
+        self.server.application = SimpleNamespace(rows=rows, latest_preview={}, navigations=[], preview_states={}, is_open=True, model=model, client_for=lambda pane, client: client, publish=Mock())
         self.server.flush_events = Mock()
         self.state = {"selected": "$0/@0", "collapsed": ["$0/@0", "$1/@1", "$2/@2"], "query": "keep", "base_id": 0}
 
@@ -50,3 +55,33 @@ class NavigationOrdering(unittest.TestCase):
         self.assertEqual(collapsed["selected"], "$1/@1")
         self.assertIn("$1/@1", collapsed["collapsed"])
         self.assertNotIn("$1", collapsed["collapsed"])
+
+    def test_native_content_focus_cancels_pending_navigation_only_for_its_client(self):
+        self.move()
+        app = self.server.application
+        self.server.navigation_inputs["observer"] = self.state
+        app.model.clients["observer"] = {"pane_id": "%10"}
+        app.navigations = [{"client": "client"}, {"client": "observer"}]
+        app.preview_states = {"%9": {"client": "client"}, "%10": {"client": "observer"}}
+        app.model.clients["client"]["pane_id"] = "%0"
+        self.server.reconcile_navigation()
+        self.assertEqual(set(self.server.navigation_inputs), {"observer"})
+        self.assertEqual(self.server.previews, {})
+        self.assertEqual(app.navigations, [{"client": "observer"}])
+        self.assertEqual(app.preview_states, {"%10": {"client": "observer"}})
+
+    def test_external_sidebar_switch_discards_the_old_cursor_after_handoff(self):
+        self.move()
+        self.server.previews.clear()
+        self.server.application.model.clients["client"].update(session_id="$2", window_id="@2", pane_id="%10")
+        self.server.reconcile_navigation()
+        self.assertEqual(self.server.navigation_inputs, {})
+
+    def test_pending_handoff_and_its_settled_destination_retain_the_cursor(self):
+        state = self.move()
+        self.server.reconcile_navigation()
+        self.assertEqual(self.server.navigation_inputs["client"], state)
+        self.server.previews.clear()
+        self.server.application.model.clients["client"].update(session_id="$1", window_id="@1", pane_id="%10")
+        self.server.reconcile_navigation()
+        self.assertEqual(self.server.navigation_inputs["client"], state)

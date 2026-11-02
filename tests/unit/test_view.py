@@ -344,6 +344,18 @@ class Keyboard(unittest.TestCase):
         self.view.accept({**message, "revision": 4, "focused": False, "main": "%1"})
         self.assertEqual(self.view.selected, "$0/@0/%1")
 
+    def test_cancelled_navigation_reanchors_selection_and_discards_deferred_actions(self):
+        message = {"type": "snapshot", "revision": 2, "rows": self.rows, "main": "%0", "focused": True}
+        self.view.accept({**message, "navigation": {"managed": True, "apply": True, "input_id": 100, "selected": "$0/@0/%1", "client": "client"}})
+        self.view.preview_waiting = True
+        self.view.navigation_request = 101
+        self.view.deferred_keys = ["\r"]
+        self.view.accept({**message, "revision": 3, "navigation": {}})
+        self.assertEqual(self.view.selected, "$0/@0/%0")
+        self.assertFalse(self.view.preview_waiting)
+        self.assertEqual(self.view.deferred_keys, [])
+        self.assertEqual(self.commands(), [])
+
     def test_live_navigation_sends_relative_steps_without_changing_a_stale_cursor(self):
         self.view.snapshot.update(live_preview=True, client="client", focused=True)
         for key in ("j", "k", "k"):

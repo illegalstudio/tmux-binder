@@ -120,6 +120,14 @@ class View:
             self.selected = saved.get("selected", "")
             self.scroll = saved.get("scroll", 0)
         navigation = message.get("navigation", {})
+        if previous.get("navigation") and not navigation:
+            self.selected = ""
+            self.preview_dirty = self.preview_waiting = False
+            self.navigation_request = 0
+            self.deferred_keys.clear()
+            self.jumps = []
+            self.jump_index = -1
+            self.user_scrolled = False
         navigation_id = int(navigation.get("input_id", 0))
         transferred = False
         managed = navigation.get("managed", False)
