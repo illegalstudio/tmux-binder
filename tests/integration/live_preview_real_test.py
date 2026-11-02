@@ -113,6 +113,7 @@ class LivePreview(unittest.TestCase):
                         server.t("switch-client", "-c", client, "-t", "work")
                         terminal.keys("\x02T")
                         terminal.wait(lambda: terminal.location()[2], server.sidebar(server.window))
+                        terminal.wait(lambda: "▸ step0" in selected())
                         terminal.keys("ggj")
                         terminal.wait(lambda: terminal.location()[1], windows[1])
                         terminal.keys("\x0c")
