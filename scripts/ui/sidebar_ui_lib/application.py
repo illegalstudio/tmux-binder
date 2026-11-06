@@ -308,6 +308,8 @@ class View:
             self.send("remove", key=row["key"])
         elif action == "toggle_filter":
             self.send("toggle-filter")
+        elif action == "toggle_highlight" and row and row["kind"] in {"window", "pane"}:
+            self.send("toggle-highlight", key=row["key"])
         elif action == "refresh":
             self.send("refresh")
         self.dirty = True
@@ -495,7 +497,7 @@ class View:
         if not self.user_scrolled:
             self.scroll = ensure_visible(index, self.scroll, lines, self.snapshot.get("scrolloff", 8))
         self.scroll = min(max(0, self.scroll), max(0, len(self.rows) - lines))
-        self.renderer.draw(self.rows, self.selected, self.scroll, self.attributes, self.query, footer, self.searching or bool(self.prompt), self.collapsed, focused=self.snapshot.get("focused", False), hovered=self.hovered)
+        self.renderer.draw(self.rows, self.selected, self.scroll, self.attributes, self.query, footer, self.searching or bool(self.prompt), self.collapsed, focused=self.snapshot.get("focused", False), hovered=self.hovered, highlighted_windows=set(self.snapshot.get("highlighted_windows", [])))
         self.send("rendered", revision=self.revision, keys=[row["key"] for row in self.rows], scroll=self.scroll, lines=lines, selected=self.selected, collapsed=sorted(self.collapsed), expanded_windows=sorted(self.expanded_windows), navigation_input_id=self.applied_input_id)
         if self.preview_dirty:
             self.send("preview", key=self.selected, state=self.navigation_state())

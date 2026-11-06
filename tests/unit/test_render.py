@@ -64,6 +64,50 @@ class RowLayout(unittest.TestCase):
             attributes = colors({}, {})
         self.assertTrue(attributes["status:needs-input"])
         self.assertTrue(attributes["status:running"])
+        self.assertTrue(attributes["window-highlight"] & curses.A_REVERSE)
+
+    def test_window_highlight_persists_without_focus_and_retains_badge_colors(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (5, 30)
+        window = {"kind": "window", "key": "$0/@0", "window": "@0", "label": "backend", "badges": [{"text": "?", "status": "needs-input"}]}
+        pane = {"kind": "pane", "key": "$0/@0/%0", "window": "@0", "label": "shell"}
+        other = {"kind": "window", "key": "$1/@1", "window": "@1", "label": "frontend"}
+        linked = {**window, "key": "$1/@0"}
+        unmarked = {"kind": "window", "key": "$1/@2", "window": "@2", "label": "idle"}
+        rows = [window, pane, other, linked, unmarked]
+        attributes = {"window-highlight": 77, "window-highlight-status:needs-input": 88, "status:needs-input": 11}
+        renderer = Renderer(screen)
+        with patch("ui.sidebar_ui_lib.render.curses.curs_set"), patch("ui.sidebar_ui_lib.render.curses.doupdate"):
+            renderer.draw(rows, pane["key"], 0, attributes, focused=False, highlighted_windows={"@0", "@1"}, hovered=window["key"])
+            writes = [(call.args[2], call.args[3]) for call in screen.addstr.call_args_list]
+            self.assertIn(("?", 88), writes)
+            self.assertEqual(renderer.previous[0][1], 77 | curses.A_UNDERLINE)
+            self.assertEqual(renderer.previous[0][3], 77)
+            self.assertEqual(renderer.previous[2][1], 77)
+            self.assertEqual(renderer.previous[3][1], 77)
+            self.assertEqual(renderer.previous[4][1], 0)
+            screen.addstr.reset_mock()
+            renderer.draw(rows, pane["key"], 0, attributes, focused=False)
+            self.assertEqual(renderer.previous[0][1], 0)
+            self.assertIn(("?", 11), [(call.args[2], call.args[3]) for call in screen.addstr.call_args_list])
+
+    def test_selected_marked_window_keeps_native_selection_and_restores_its_mark(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (2, 30)
+        row = {"kind": "window", "key": "$0/@0", "window": "@0", "label": "backend", "badges": [{"text": "?", "status": "needs-input"}]}
+        attributes = {"selected": 33, "selected-status:needs-input": 44, "window-highlight": 77, "window-highlight-status:needs-input": 88}
+        renderer = Renderer(screen)
+        with patch("ui.sidebar_ui_lib.render.curses.curs_set"), patch("ui.sidebar_ui_lib.render.curses.doupdate"):
+            renderer.draw([row], row["key"], 0, attributes, highlighted_windows={"@0"})
+            self.assertEqual(renderer.previous[0][1], 33 | curses.A_UNDERLINE)
+            self.assertEqual(renderer.previous[0][3], 33)
+            self.assertIn(("?", 44), [(call.args[2], call.args[3]) for call in screen.addstr.call_args_list])
+            screen.addstr.reset_mock()
+            renderer.draw([row], row["key"], 0, attributes, focused=False, highlighted_windows={"@0"})
+            self.assertEqual(renderer.previous[0][1], 77)
+            self.assertIn(("?", 88), [(call.args[2], call.args[3]) for call in screen.addstr.call_args_list])
+            renderer.draw([row], row["key"], 0, attributes)
+            self.assertEqual(renderer.previous[0][1], 33)
 
     def test_hover_underlines_only_the_label_and_preserves_status_color(self):
         screen = Mock()

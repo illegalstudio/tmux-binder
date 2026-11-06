@@ -42,6 +42,7 @@ class Application:
         self.window_main: dict[str, str] = saved.get("window_main", {})
         self.client_main: dict[str, str] = saved.get("client_main", {})
         self.view_state: dict[str, dict] = saved.get("views", {})
+        self.highlighted_windows: set[str] = set(saved.get("highlighted_windows", []))
         self.window_client: dict[str, str] = {}
         self.options = self._load_options()
         self.icons, self.badges = visuals(self.options)
@@ -104,6 +105,7 @@ class Application:
             "agents": self.agents.panes, "delegated": sorted(self.agents.delegated), "windows": self.window_state,
             "window_main": self.window_main, "client_main": self.client_main,
             "views": self.view_state,
+            "highlighted_windows": sorted(self.highlighted_windows),
         }
         serialized = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         if serialized != self.saved_json:
@@ -240,9 +242,11 @@ class Application:
             self.repair_content_exit(before_reconcile)
             self._update_main()
             self._record_geometry()
+        self.highlighted_windows.intersection_update(self.model.windows)
         rows = project_rows(self.model, self.agents.panes, self.options, self.icons, self.badges, self.captures)
-        context = tuple((pid, pane["pane_active"], pane["pane_width"], pane["pane_height"], self.window_main.get(pane["window_id"], ""), self.window_client.get(pane["window_id"], ""), self.model.visible(pane["window_id"])) for pid, pane in self.model.panes.items() if pane["sidebar"])
+        context = tuple((pid, pane["pane_active"], pane["pane_width"], pane["pane_height"], self.window_main.get(pane["window_id"], ""), self.window_client.get(pane["window_id"], ""), self.model.visible(pane["window_id"]), self.model.clients.get(self.window_client.get(pane["window_id"], ""), {}).get("session_id", "")) for pid, pane in self.model.panes.items() if pane["sidebar"])
         publication = (context, shortcuts(self.options), option(self.options, "scrolloff"), option(self.options, "live_preview"), option(self.options, "collapse_panes"), {kind: option(self.options, "color_" + kind) for kind in ("session", "window", "pane")}, tuple(self.model.globals.get(key, "") for key in ("pane-active-border-style", "pane-border-style", "status-style", "pane-border-format", "window-status-current-style", "window-status-style")))
+        publication += (tuple(sorted(self.highlighted_windows)),)
         if rows != self.rows or publication != self.last_publication:
             self.rows = rows
             self.last_publication = publication
@@ -525,6 +529,7 @@ class Application:
             navigation = {**navigation, "apply": False}
         return {
             "type": "snapshot", "revision": self.revision, "rows": self.rows,
+            "highlighted_windows": sorted(self.highlighted_windows),
             "main": self.window_main.get(window, ""), "focused": pane.get("pane_active") == "1",
             "client": client, "session": self.model.clients.get(client, {}).get("session_id", ""),
             "live_preview": enabled(option(self.options, "live_preview"), True),
@@ -539,6 +544,15 @@ class Application:
 
     def publish(self) -> None:
         self.emit("snapshots", {})
+
+    def toggle_highlight(self, row: dict) -> None:
+        window = row.get("window", "")
+        if row["kind"] not in {"window", "pane"} or window not in self.model.windows:
+            return
+        self.highlighted_windows.symmetric_difference_update({window})
+        self.revision += 1
+        self.publish()
+        self.save()
 
     def client_for(self, pane_id: str, explicit: str = "") -> str:
         if explicit:

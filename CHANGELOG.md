@@ -4,6 +4,10 @@ All notable project versions are documented here.
 
 ## Unreleased
 
+- Add `u` to mark or unmark individual windows with a contrasting background.
+  Multiple windows can stay marked across navigation, content focus and reloads.
+  Keep the cursor visible on marked rows with native selection colors and an
+  underlined label.
 - Correct the tmux minimum to 3.5 for pane title control and native mouse menus.
   Test pinned tmux 3.5 and 3.7c with both supported Python versions in CI.
 - Add interactive `make release`, a read-only release preview and a tag-triggered

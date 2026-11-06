@@ -268,6 +268,8 @@ class Server:
             suffix = "filter_enabled" if command == "toggle-filter" else "hide_panes"
             app.set_option(suffix, "off" if enabled(option(app.options, suffix), suffix == "filter_enabled") else "on")
             app.refresh(False)
+        elif command == "toggle-highlight":
+            app.toggle_highlight(self.row_for(message))
         elif command == "agent":
             event = normalize(message["app"], message.get("payload", {}), message.get("event", ""))
             event["updated_at"] = message.get("updated_at")

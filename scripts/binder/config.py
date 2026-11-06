@@ -13,6 +13,7 @@ SHORTCUTS = {
     "jump_back": "C-o", "jump_forward": "C-i", "rename_session": "R",
     "rename_window": "r", "close_pane": "x", "toggle_filter": "f",
     "move_window_up": "K", "move_window_down": "J",
+    "toggle_highlight": "u",
 }
 
 

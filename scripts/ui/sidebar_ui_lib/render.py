@@ -39,10 +39,11 @@ def style_parts(style: str) -> tuple[int, int, int]:
 
 
 def colors(configuration: dict, styles: dict) -> dict[str, int]:
-    result = {"session": curses.A_BOLD, "window": 0, "pane": curses.A_DIM, "guide": curses.A_DIM, "selected": curses.A_REVERSE | curses.A_BOLD}
+    result = {"session": curses.A_BOLD, "window": 0, "pane": curses.A_DIM, "guide": curses.A_DIM, "selected": curses.A_REVERSE | curses.A_BOLD, "window-highlight": curses.A_REVERSE | curses.A_BOLD}
     for status in ("running", "subagent-running", "needs-input", "done", "error"):
         result["status:" + status] = curses.A_BOLD
         result["selected-status:" + status] = result["selected"]
+        result["window-highlight-status:" + status] = result["window-highlight"]
     if not curses.has_colors() or curses.COLORS < 256:
         return result
     pairs: dict[tuple[int, int], int] = {}
@@ -75,12 +76,14 @@ def colors(configuration: dict, styles: dict) -> dict[str, int]:
     if foreground == -1 and background == -1:
         foreground = style_parts(styles.get("pane-active-border-style", ""))[0]
     result["selected"] = pair(foreground, background) | flags | curses.A_BOLD
+    result["window-highlight"] = pair(curses.COLOR_BLACK, curses.COLOR_WHITE) | curses.A_BOLD
     if background == -1:
         result["selected"] |= curses.A_REVERSE
     selected_background = foreground if result["selected"] & curses.A_REVERSE else background
     for status, color in (("running", 6), ("subagent-running", 6), ("needs-input", 3), ("done", 2), ("error", 1)):
         result["status:" + status] = pair(color) | curses.A_BOLD
         result["selected-status:" + status] = pair(color + 8 if color == selected_background else color, selected_background) | curses.A_BOLD
+        result["window-highlight-status:" + status] = pair(color, curses.COLOR_WHITE) | curses.A_BOLD
     return result
 
 
@@ -155,7 +158,7 @@ class Renderer:
         self.previous.clear()
         self.needs_clear = True
 
-    def draw(self, rows: list[dict], selected: str, scroll: int, attributes: dict[str, int], query: str = "", footer: str = "", cursor: bool = False, collapsed: set[str] | None = None, focused: bool = True, hovered: str = "") -> None:
+    def draw(self, rows: list[dict], selected: str, scroll: int, attributes: dict[str, int], query: str = "", footer: str = "", cursor: bool = False, collapsed: set[str] | None = None, focused: bool = True, hovered: str = "", highlighted_windows: set[str] | None = None) -> None:
         height, columns = self.screen.getmaxyx()
         cells = max(0, columns - 1)
         lines = height - bool(footer)
@@ -170,17 +173,26 @@ class Renderer:
             is_collapsed = bool(collapsed and row["key"] in collapsed)
             chosen = row["key"] == selected
             highlighted = chosen and focused
+            marked_window = row["kind"] == "window" and row.get("window") in (highlighted_windows or ())
+            window_highlight = marked_window and not highlighted
             text, prefix, runs = row_layout(row, chosen, is_collapsed, cells)
             badge = "".join(text for text, _ in runs)
             attribute = attributes.get("selected", curses.A_REVERSE | curses.A_BOLD) if highlighted else attributes.get(row["kind"], 0)
-            if chosen and not focused:
+            if window_highlight:
+                attribute = attributes.get("window-highlight", curses.A_REVERSE | curses.A_BOLD)
+            if highlighted and marked_window:
+                attribute |= curses.A_UNDERLINE
+            if chosen and not focused and not window_highlight:
                 attribute |= curses.A_DIM
             if row["key"] == hovered and not highlighted:
                 attribute |= curses.A_UNDERLINE
             if query and query.casefold() in text.casefold():
                 attribute |= curses.A_UNDERLINE
-            badge_attributes = tuple((text, attributes.get(("selected-status:" if highlighted else "status:") + status, attribute)) for text, status in runs)
-            guide_attribute = attribute if highlighted else attributes.get("guide", curses.A_DIM)
+            badge_prefix = "window-highlight-status:" if window_highlight else "selected-status:" if highlighted else "status:"
+            badge_attributes = tuple((text, attributes.get(badge_prefix + status, attribute)) for text, status in runs)
+            guide_attribute = attribute if highlighted or window_highlight else attributes.get("guide", curses.A_DIM)
+            if marked_window:
+                guide_attribute &= ~curses.A_UNDERLINE
             frame.append((text, attribute, prefix, guide_attribute, badge, badge_attributes))
         while len(frame) < max(0, lines):
             frame.append(("", 0, "", 0, "", ()))

@@ -114,6 +114,7 @@ The `tmux-pane-tree.conf` filename and `@tmux_pane_tree_*` option names remain c
 | `x` | Close the selected item, with confirmation for headers |
 | `f` | Toggle the configured pane filter |
 | `p` | Toggle pane rows |
+| `u` | Mark or unmark the selected window with a background highlight |
 | `m` / right click | Open the native context menu |
 | `q` | Close the sidebar everywhere |
 
@@ -127,6 +128,15 @@ The order follows tmux and survives Binder reloads; linked windows keep their
 positions in other sessions. Filtered windows retain their positions.
 
 Live preview follows selection between sessions, windows and panes, keeping keyboard focus in the sidebar. Search, expanded branches, scroll and jump history follow you. Browsing a pane that needs input keeps its attention indicator until you actually focus the content.
+
+Press `u` in the sidebar to mark the selected window with a contrasting
+background. You can mark multiple windows to keep track of your work. Each mark
+stays on its window when you move elsewhere or focus the content. Press `u` on a
+marked window to unmark it. Selecting a pane marks or unmarks its containing
+window. Marks are shared across sidebar views, including linked windows, and
+survive sidebar and coordinator reloads.
+The selected row uses the normal cursor colors. A marked window under the cursor
+also has an underlined label; its marked background returns when you move away.
 
 With tmux mouse support enabled (`set -g mouse on`), moving over a label briefly
 underlines it without changing selection or focus. Click once to browse and twice
@@ -331,7 +341,7 @@ Supported icon IDs: `claude`, `codex`, `cursor`, `opencode`, `pi`, `kiro`, `grok
 <details>
 <summary>Custom shortcuts and environment variables</summary>
 
-Customizable actions and defaults: `add_window` (`aw`), `add_session` (`as`), `go_top` (`gg`), `go_bottom` (`G`), `jump_back` (`C-o`), `jump_forward` (`C-i`), `rename_window` (`r`), `rename_session` (`R`), `move_window_up` (`K`), `move_window_down` (`J`), `toggle_filter` (`f`) and `close_pane` (`x`).
+Customizable actions and defaults: `add_window` (`aw`), `add_session` (`as`), `go_top` (`gg`), `go_bottom` (`G`), `jump_back` (`C-o`), `jump_forward` (`C-i`), `rename_window` (`r`), `rename_session` (`R`), `move_window_up` (`K`), `move_window_down` (`J`), `toggle_filter` (`f`), `toggle_highlight` (`u`) and `close_pane` (`x`).
 
 To keep the earlier two-key rename bindings, set both options explicitly:
 

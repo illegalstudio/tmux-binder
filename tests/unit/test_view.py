@@ -344,6 +344,35 @@ class Keyboard(unittest.TestCase):
         self.view.accept({**message, "revision": 4, "focused": False, "main": "%1"})
         self.assertEqual(self.view.selected, "$0/@0/%1")
 
+    def test_u_toggles_window_highlight_but_is_literal_in_search_and_prompts(self):
+        self.view.handle_key("u")
+        self.view.handle_key("u")
+        self.assertEqual([(item["command"], item["key"]) for item in self.commands()], [("toggle-highlight", "$0/@0/%0")] * 2)
+        self.view.outgoing.clear()
+        self.view.selected = "$0"
+        self.view.handle_key("u")
+        self.assertEqual(self.commands(), [])
+        self.view.outgoing.clear()
+        self.view.handle_key("/")
+        self.view.handle_key("u")
+        self.assertEqual(self.view.query, "u")
+        self.assertEqual(self.commands(), [])
+        self.view.searching = False
+        self.view.prompt = {"action": "rename_window", "text": "", "label": "Rename: "}
+        self.view.handle_key("u")
+        self.assertEqual(self.view.prompt["text"], "u")
+        self.assertEqual(self.commands(), [])
+
+    def test_marks_are_drawn_independently_of_the_current_window_and_cursor(self):
+        other = {"kind": "window", "key": "$1/@1", "window": "@1", "session_id": "$1", "text": "other"}
+        self.view.rows.append(other)
+        self.view.snapshot.update(highlighted_windows=["@0", "@2"])
+        self.view.selected = other["key"]
+        self.view.renderer = Mock()
+        self.view.draw()
+        self.assertEqual(self.view.renderer.draw.call_args.kwargs["highlighted_windows"], {"@0", "@2"})
+        self.assertEqual(self.view.selected, other["key"])
+
     def test_cancelled_navigation_reanchors_selection_and_discards_deferred_actions(self):
         message = {"type": "snapshot", "revision": 2, "rows": self.rows, "main": "%0", "focused": True}
         self.view.accept({**message, "navigation": {"managed": True, "apply": True, "input_id": 100, "selected": "$0/@0/%1", "client": "client"}})

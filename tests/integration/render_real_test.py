@@ -15,6 +15,208 @@ from live_preview_real_test import Terminal
 
 
 class SidebarRendering(unittest.TestCase):
+    def test_selection_stays_distinct_on_marked_windows(self):
+        with tempfile.TemporaryDirectory(prefix="binder-highlight-cursor-") as directory:
+            server = Harness(Path(directory))
+            terminal = None
+            try:
+                other = server.t("new-window", "-dP", "-F", "#{window_id}", "-t", "work", "-n", "notes", "sleep 86400")
+                server.t("set-option", "-g", "default-terminal", "tmux-256color")
+                server.t("set-option", "-g", "assume-paste-time", "0")
+                server.t("set-option", "-gw", "window-status-current-style", "fg=white,bg=blue")
+                terminal = Terminal(server)
+                terminal.wait(lambda: server.t("display-message", "-pt", server.main, "#{session_attached}"), "1")
+                terminal.keys("\x02t")
+                terminal.wait(lambda: bool(server.sidebar(other)))
+                terminal.keys("\x02T")
+                terminal.wait(lambda: terminal.location()[2], server.sidebar(server.window))
+                terminal.wait(lambda: "▸ editor" in terminal.frame())
+
+                def codes(label):
+                    line = next(line for line in server.t("capture-pane", "-ept", server.sidebar(terminal.location()[1])).splitlines() if label in line)
+                    return {code for group in re.findall(r"\x1b\[([0-9;]*)m", line) for code in group.split(";")}
+
+                terminal.keys("u")
+                terminal.wait(lambda: {"44", "4"}.issubset(codes("editor")))
+                self.assertNotIn("47", codes("editor"))
+                terminal.keys("j")
+                terminal.wait(lambda: terminal.location()[1], other)
+                terminal.wait(lambda: "47" in codes("editor") and "44" in codes("notes"))
+                terminal.keys("u")
+                terminal.wait(lambda: {"44", "4"}.issubset(codes("notes")))
+                self.assertIn("47", codes("editor"))
+                terminal.keys("k")
+                terminal.wait(lambda: terminal.location()[1], server.window)
+                terminal.wait(lambda: {"44", "4"}.issubset(codes("editor")) and "47" in codes("notes"))
+                terminal.keys("\r")
+                terminal.wait(lambda: terminal.location()[2], server.main)
+                terminal.wait(lambda: "47" in codes("editor") and "47" in codes("notes"))
+                terminal.keys("\x02T")
+                terminal.wait(lambda: terminal.location()[2], server.sidebar(server.window))
+                terminal.wait(lambda: {"44", "4"}.issubset(codes("editor")))
+                terminal.keys("u")
+                terminal.wait(lambda: "44" in codes("editor") and "4" not in codes("editor"))
+                self.assertIn("47", codes("notes"))
+                self.assertEqual(server.api("snapshot", pane=server.sidebar(server.window))["highlighted_windows"], [other])
+            finally:
+                if terminal is not None:
+                    terminal.close()
+                server.close()
+
+    def test_window_marks_are_shared_between_linked_sessions_and_removed_on_window_exit(self):
+        with tempfile.TemporaryDirectory(prefix="binder-highlight-linked-") as directory:
+            server = Harness(Path(directory))
+            terminal = None
+            try:
+                server.t("new-session", "-d", "-s", "ops", "-n", "logs", "sleep 86400")
+                server.t("link-window", "-s", server.window, "-t", "ops:5")
+                server.t("select-window", "-t", "ops:5")
+                server.t("set-option", "-g", "default-terminal", "tmux-256color")
+                server.t("set-option", "-g", "assume-paste-time", "0")
+                server.t("set-option", "-gw", "pane-active-border-style", "fg=blue")
+                server.t("set-option", "-gw", "window-status-current-style", "fg=white,bg=blue")
+                server.t("set-option", "-g", "@tmux_pane_tree_session_order", "work,ops")
+                terminal = Terminal(server)
+                terminal.wait(lambda: server.t("display-message", "-pt", server.main, "#{session_attached}"), "1")
+                terminal.keys("\x02t")
+                terminal.wait(lambda: bool(server.sidebar(server.window)))
+                terminal.keys("\x02T")
+                sidebar = server.sidebar(server.window)
+                terminal.wait(lambda: terminal.location()[2], sidebar)
+                terminal.wait(lambda: "▸ editor" in terminal.frame())
+                client = server.t("list-clients", "-F", "#{client_name}")
+
+                def highlighted_sessions():
+                    current = ""
+                    found = []
+                    for line in server.t("capture-pane", "-ept", terminal.location()[2]).splitlines():
+                        plain = re.sub(r"\x1b\[[0-9;]*m", "", line).strip()
+                        if plain in {"work", "ops"}:
+                            current = plain
+                        codes = {code for group in re.findall(r"\x1b\[([0-9;]*)m", line) for code in group.split(";")}
+                        if "editor" in plain and ("47" in codes or {"44", "4"}.issubset(codes)):
+                            found.append(current)
+                    return found
+
+                terminal.keys("u")
+                terminal.wait(highlighted_sessions, ["work", "ops"])
+                for session in ("ops", "work"):
+                    server.t("switch-client", "-c", client, "-t", session)
+                    terminal.wait(lambda: terminal.location(), [session, server.window, sidebar])
+                    session_id = server.t("display-message", "-pt", session, "#{session_id}")
+                    terminal.wait(lambda: server.api("snapshot", pane=sidebar)["session"], session_id)
+                    self.assertEqual(highlighted_sessions(), ["work", "ops"])
+                terminal.keys("u")
+                terminal.wait(highlighted_sessions, [])
+                terminal.keys("u")
+                terminal.wait(highlighted_sessions, ["work", "ops"])
+                server.t("rename-window", "-t", server.window, "renamed")
+                terminal.wait(lambda: "renamed" in terminal.frame())
+                self.assertEqual(server.api("snapshot", pane=sidebar)["highlighted_windows"], [server.window])
+                logs = server.t("display-message", "-pt", "ops:0", "#{window_id}")
+                server.t("switch-client", "-c", client, "-t", "ops:0")
+                terminal.wait(lambda: terminal.location()[1], logs)
+                server.t("select-pane", "-t", server.sidebar(logs))
+                terminal.wait(lambda: terminal.location()[2], server.sidebar(logs))
+                server.t("unlink-window", "-t", "ops:5")
+                server.api("refresh")
+                self.assertEqual(server.api("snapshot", pane=server.sidebar(logs))["highlighted_windows"], [server.window])
+                server.t("kill-window", "-t", server.window)
+                terminal.wait(lambda: server.api("snapshot", pane=server.sidebar(logs))["highlighted_windows"], [])
+            finally:
+                if terminal is not None:
+                    terminal.close()
+                server.close()
+
+    def test_u_marks_multiple_windows_through_focus_navigation_and_reload(self):
+        with tempfile.TemporaryDirectory(prefix="binder-window-highlight-") as directory:
+            server = Harness(Path(directory))
+            terminal = None
+            try:
+                from binder.development import reload
+
+                other = server.t("new-session", "-dP", "-F", "#{pane_id}", "-s", "ops", "-n", "logs", "sleep 86400")
+                window = server.t("display-message", "-pt", other, "#{window_id}")
+                server.t("set-option", "-g", "default-terminal", "tmux-256color")
+                server.t("set-option", "-g", "assume-paste-time", "0")
+                server.t("set-option", "-gw", "pane-active-border-style", "fg=blue")
+                server.t("set-option", "-gw", "window-status-current-style", "fg=white,bg=blue")
+                server.t("set-option", "-g", "@tmux_pane_tree_session_order", "work,ops")
+                terminal = Terminal(server)
+                terminal.wait(lambda: server.t("display-message", "-pt", server.main, "#{session_attached}"), "1")
+                terminal.keys("\x02t")
+                terminal.wait(lambda: bool(server.sidebar(window)))
+                terminal.keys("\x02T")
+                terminal.wait(lambda: terminal.location()[2], server.sidebar(server.window))
+                terminal.wait(lambda: "▸ editor" in terminal.frame())
+                before = server.t("list-panes", "-a", "-F", "#{pane_id}|#{pane_pid}")
+
+                def window_line(label):
+                    return next(line for line in server.t("capture-pane", "-ept", server.sidebar(terminal.location()[1])).splitlines() if label in line)
+
+                def highlighted(label):
+                    codes = {code for group in re.findall(r"\x1b\[([0-9;]*)m", window_line(label)) for code in group.split(";")}
+                    return "47" in codes or {"44", "4"}.issubset(codes)
+
+                self.assertFalse(highlighted("editor"))
+                terminal.keys("u")
+                terminal.wait(lambda: highlighted("editor"))
+                terminal.keys("l")
+                terminal.wait(lambda: "▾ editor" in terminal.frame())
+                terminal.keys("j")
+                terminal.wait(lambda: "sleep" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
+                terminal.keys("u")
+                terminal.wait(lambda: not highlighted("editor"))
+                terminal.keys("u")
+                terminal.wait(lambda: highlighted("editor"))
+                terminal.keys("\r")
+                terminal.wait(lambda: terminal.location()[2], server.main)
+                terminal.wait(lambda: highlighted("editor"))
+                terminal.keys("\x02T")
+                terminal.wait(lambda: terminal.location()[2], server.sidebar(server.window))
+                terminal.keys("G")
+                terminal.wait(lambda: terminal.location()[1], window)
+                terminal.wait(lambda: highlighted("editor") and not highlighted("logs"))
+                terminal.keys("u")
+                terminal.wait(lambda: highlighted("editor") and highlighted("logs"))
+                marked = sorted([server.window, window])
+                self.assertEqual(server.api("snapshot", pane=server.sidebar(server.window))["highlighted_windows"], marked)
+                server.api("update-state", pane=other, event={"app": "claude", "status": "needs-input"})
+                terminal.wait(lambda: "?" in window_line("logs"))
+                self.assertIn("33", [code for codes in re.findall(r"\x1b\[([0-9;]*)m", window_line("logs").split("?")[0]) for code in codes.split(";")])
+                reload(server.identity)
+                terminal.wait(lambda: highlighted("editor") and highlighted("logs"))
+                self.assertEqual(server.api("snapshot", pane=server.sidebar(window))["highlighted_windows"], marked)
+                server.t("set-option", "-g", "@tmux_pane_tree_live_preview", "off")
+                server.api("refresh")
+                terminal.keys("gg")
+                terminal.wait(lambda: "sleep" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
+                self.assertEqual(terminal.location()[1], window)
+                terminal.keys("u")
+                terminal.wait(lambda: not highlighted("editor") and highlighted("logs"))
+                self.assertEqual(server.api("snapshot", pane=server.sidebar(window))["highlighted_windows"], [window])
+                terminal.keys("G")
+                terminal.wait(lambda: "logs" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
+                terminal.keys("u")
+                terminal.wait(lambda: not highlighted("editor") and not highlighted("logs"))
+                self.assertEqual(server.api("snapshot", pane=server.sidebar(server.window))["highlighted_windows"], [])
+                terminal.keys("gg")
+                terminal.wait(lambda: "sleep" in next(line for line in terminal.frame().splitlines() if line.startswith("▶")))
+                terminal.keys("u")
+                terminal.wait(lambda: highlighted("editor"))
+                terminal.keys("\x02t")
+                terminal.wait(lambda: server.sidebar(window), "")
+                terminal.keys("\x02t")
+                terminal.wait(lambda: bool(server.sidebar(window)))
+                terminal.wait(lambda: highlighted("editor") and not highlighted("logs"))
+                content = {line.split("|")[0]: line.split("|")[1] for line in before.splitlines()}
+                self.assertEqual(server.t("display-message", "-pt", server.main, "#{pane_pid}"), content[server.main])
+                self.assertEqual(server.t("display-message", "-pt", other, "#{pane_pid}"), content[other])
+            finally:
+                if terminal is not None:
+                    terminal.close()
+                server.close()
+
     def test_client_resize_redraws_labels_without_keyboard_input(self):
         with tempfile.TemporaryDirectory(prefix="binder-client-resize-") as directory:
             server = Harness(Path(directory))
